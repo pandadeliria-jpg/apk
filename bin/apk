@@ -622,134 +622,46 @@ class APKManager:
         except Exception as e:
             self.error(f"Upgrade check failed: {e}")
 
-    def _get_remote_version(self) -> Optional[str]:
-        """Get latest version from repo using gh or git"""
-        # Try gh CLI first (works with private repos)
-        try:
-            result = subprocess.run(
-                ['gh', 'api', f'repos/{GITHUB_REPO}/contents/bin/apk?ref=main', 
-                 '-q', '.content'],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            if result.returncode == 0:
-                import base64
-                content = base64.b64decode(result.stdout.strip()).decode('utf-8')
-                match = re.search(r'VERSION = "([0-9.]+)"', content)
-                return match.group(1) if match else None
-        except (subprocess.SubprocessError, FileNotFoundError):
-            pass
-        
-        # Try git clone to temp (works with private repos if user has access)
-        import tempfile
-        try:
-            with tempfile.TemporaryDirectory() as tmpdir:
-                result = subprocess.run(
-                    ['git', 'clone', '--depth', '1', 
-                     f'https://github.com/{GITHUB_REPO}.git', tmpdir],
-                    capture_output=True,
-                    text=True,
-                    timeout=30
-                )
-                if result.returncode == 0:
-                    apk_file = Path(tmpdir) / 'bin' / 'apk'
-                    if apk_file.exists():
-                        content = apk_file.read_text()
-                        match = re.search(r'VERSION = "([0-9.]+)"', content)
-                        return match.group(1) if match else None
-        except (subprocess.SubprocessError, FileNotFoundError):
-            pass
-        
-        # Fallback to raw URL (public repos only)
-        try:
-            req = urllib.request.Request(
-                f"{GITHUB_RAW}/bin/apk",
-                headers={'User-Agent': 'Mozilla/5.0'}
-            )
-            with urllib.request.urlopen(req, timeout=10) as response:
-                content = response.read().decode('utf-8')
-                match = re.search(r'VERSION = "([0-9.]+)"', content)
-                return match.group(1) if match else None
-        except Exception:
-            pass
-        
-        return None
-    
-    def _download_latest(self) -> Optional[str]:
-        """Download latest apk script using gh or git"""
-        # Try gh CLI first
-        try:
-            result = subprocess.run(
-                ['gh', 'api', f'repos/{GITHUB_REPO}/contents/bin/apk?ref=main',
-                 '-q', '.content'],
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
-            if result.returncode == 0:
-                import base64
-                return base64.b64decode(result.stdout.strip()).decode('utf-8')
-        except (subprocess.SubprocessError, FileNotFoundError):
-            pass
-        
-        # Try git clone
-        import tempfile
-        try:
-            with tempfile.TemporaryDirectory() as tmpdir:
-                result = subprocess.run(
-                    ['git', 'clone', '--depth', '1',
-                     f'https://github.com/{GITHUB_REPO}.git', tmpdir],
-                    capture_output=True,
-                    text=True,
-                    timeout=30
-                )
-                if result.returncode == 0:
-                    apk_file = Path(tmpdir) / 'bin' / 'apk'
-                    if apk_file.exists():
-                        return apk_file.read_text()
-        except (subprocess.SubprocessError, FileNotFoundError):
-            pass
-        
-        # Fallback to raw URL
-        try:
-            req = urllib.request.Request(
-                f"{GITHUB_RAW}/bin/apk",
-                headers={'User-Agent': 'Mozilla/5.0'}
-            )
-            with urllib.request.urlopen(req, timeout=30) as response:
-                return response.read().decode('utf-8')
-        except Exception:
-            pass
-        
-        return None
-
     def check_self_update(self):
-        """Check for apk command updates (works with private repos)"""
+        """Check for apk command updates"""
         self.header("Checking for updates")
         self.spinner("Fetching latest version")
 
-        remote_version = self._get_remote_version()
-        self.done()
+        try:
+            req = urllib.request.Request(
+                f"{GITHUB_RAW}/bin/apk",
+                headers={'User-Agent': 'Mozilla/5.0'}
+            )
 
-        if not remote_version:
-            self.error("Could not determine latest version")
-            print(f"\n{C.DIM}Make sure you have 'gh' CLI or 'git' installed{C.END}")
-            print(f"{C.DIM}GitHub repo: https://github.com/{GITHUB_REPO}{C.END}")
-            return
+            with urllib.request.urlopen(req, timeout=10) as response:
+                content = response.read().decode('utf-8')
+                match = re.search(r'VERSION = "([0-9.]+)"', content)
+                remote_version = match.group(1) if match else None
 
-        print(f"{C.DIM}Current version: {C.CYAN}{VERSION}{C.END}")
-        print(f"{C.DIM}Latest version:  {C.GREEN}{remote_version}{C.END}")
-        print()
+            self.done()
 
-        if remote_version != VERSION:
-            self.success("Update available!")
-            print(f"\n{C.DIM}Run 'apk --self-update' to install{C.END}")
-        else:
-            self.success("You have the latest version")
+            if not remote_version:
+                self.error("Could not determine latest version")
+                print(f"\n{C.DIM}GitHub repo: https://github.com/{GITHUB_REPO}{C.END}")
+                return
+
+            print(f"{C.DIM}Current version: {C.CYAN}{VERSION}{C.END}")
+            print(f"{C.DIM}Latest version:  {C.GREEN}{remote_version}{C.END}")
+            print()
+
+            if remote_version != VERSION:
+                self.success("Update available!")
+                print(f"\n{C.DIM}Run 'apk --self-update' to install{C.END}")
+            else:
+                self.success("You have the latest version")
+
+        except Exception as e:
+            self.done()
+            self.error(f"Check failed: {e}")
+            print(f"\n{C.DIM}GitHub repo: https://github.com/{GITHUB_REPO}{C.END}")
 
     def self_update(self):
-        """Update apk command from GitHub (works with private repos)"""
+        """Update apk command from GitHub"""
         self.header("Updating APK Manager")
         self.spinner("Downloading latest version")
 
@@ -757,14 +669,16 @@ class APKManager:
             script_path = Path(__file__).resolve()
             backup_path = script_path.with_suffix('.py.bak')
 
-            new_content = self._download_latest()
-            self.done()
+            req = urllib.request.Request(
+                f"{GITHUB_RAW}/bin/apk",
+                headers={'User-Agent': 'Mozilla/5.0'}
+            )
 
-            if not new_content:
-                self.error("Failed to download update")
-                print(f"\n{C.DIM}Make sure you have 'gh' CLI or 'git' installed{C.END}")
-                print(f"{C.DIM}GitHub repo: https://github.com/{GITHUB_REPO}{C.END}")
-                return
+            new_content = None
+            with urllib.request.urlopen(req, timeout=30) as response:
+                new_content = response.read().decode('utf-8')
+
+            self.done()
 
             if 'APK Manager' not in new_content or 'VERSION' not in new_content:
                 self.error("Downloaded file is invalid")
