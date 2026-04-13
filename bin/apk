@@ -132,6 +132,103 @@ class APKManager:
         
         print(f"{C.DIM}Install with: apk install <package-name>{C.END}")
     
+    def _get_proxy(self, proxy_arg: str = None) -> Optional[str]:
+        """Get proxy URL from argument, config, or auto-detect WARP/Tor"""
+        # 1. Check command-line argument first
+        if proxy_arg:
+            if proxy_arg.lower() == 'warp':
+                return self._get_warp_proxy()
+            elif proxy_arg.lower() == 'tor':
+                return self._get_tor_proxy()
+            return proxy_arg
+        
+        # 2. Check config file
+        config_file = APK_PREFIX / "config.json"
+        if config_file.exists():
+            try:
+                config = json.loads(config_file.read_text())
+                proxy = config.get('proxy')
+                if proxy:
+                    if proxy.lower() == 'warp':
+                        return self._get_warp_proxy()
+                    elif proxy.lower() == 'tor':
+                        return self._get_tor_proxy()
+                    return proxy
+            except Exception:
+                pass
+        
+        # 3. Auto-detect running WARP
+        if self._is_warp_running():
+            return self._get_warp_proxy()
+        
+        # 4. Auto-detect Tor
+        if self._is_tor_running():
+            return self._get_tor_proxy()
+        
+        return None
+    
+    def _is_warp_running(self) -> bool:
+        """Check if Cloudflare WARP is running"""
+        try:
+            result = subprocess.run(
+                ['warp-cli', 'status'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            return result.returncode == 0 and 'Connected' in result.stdout
+        except (subprocess.SubprocessError, FileNotFoundError):
+            return False
+    
+    def _get_warp_proxy(self) -> Optional[str]:
+        """Get WARP SOCKS5 proxy URL"""
+        # WARP creates a local SOCKS5 proxy
+        # Check if WARP socks proxy is available
+        try:
+            result = subprocess.run(
+                ['warp-cli', 'socks5', 'enable'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            # WARP SOCKS5 runs on localhost:8080 by default
+            return 'socks5://127.0.0.1:8080'
+        except (subprocess.SubprocessError, FileNotFoundError):
+            pass
+        
+        # Fallback: use WARP's HTTP proxy if available
+        try:
+            result = subprocess.run(
+                ['warp-cli', 'tunnel', 'ip'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0:
+                # Use WARP virtual IP as proxy indicator
+                return 'http://127.0.0.1:8080'
+        except (subprocess.SubprocessError, FileNotFoundError):
+            pass
+        
+        return None
+    
+    def _is_tor_running(self) -> bool:
+        """Check if Tor daemon is running"""
+        try:
+            # Check if Tor SOCKS port is open
+            import socket
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(2)
+            result = sock.connect_ex(('127.0.0.1', 9050))
+            sock.close()
+            return result == 0
+        except Exception:
+            return False
+    
+    def _get_tor_proxy(self) -> str:
+        """Get Tor SOCKS5 proxy URL"""
+        return 'socks5://127.0.0.1:9050'
+    
     def _check_apkmirror_downloader(self) -> bool:
         """Check if apkmirror-downloader is installed"""
         try:
@@ -161,9 +258,20 @@ class APKManager:
             self.error(f"Failed to install apkmirror-downloader: {e}")
             return False
 
-    def download_apk(self, package: str, url: str = None) -> Optional[Path]:
-        """Download APK from APKMirror using apkmirror-downloader"""
+    def download_apk(self, package: str, url: str = None, proxy: str = None) -> Optional[Path]:
+        """Download APK from APKMirror using apkmirror-downloader with proxy support"""
         self.spinner(f"Downloading {package}")
+        
+        # Get proxy if not provided
+        if not proxy:
+            proxy = self._get_proxy()
+        
+        # Show proxy info
+        if proxy:
+            self.done()
+            proxy_type = proxy.split(':')[0].upper()
+            self.info(f"Using {proxy_type} proxy: {proxy}")
+            self.spinner(f"Downloading {package}")
 
         # Check for apkmirror-downloader
         if not self._check_apkmirror_downloader():
@@ -183,13 +291,26 @@ class APKManager:
         download_dir.mkdir(parents=True, exist_ok=True)
         
         try:
+            # Build apkmirror-downloader command with proxy
+            cmd = ['apkmirror-downloader', app_name, '-d', str(download_dir)]
+            
+            # Set proxy environment variable if available
+            env = os.environ.copy()
+            if proxy:
+                if proxy.startswith('socks5://'):
+                    env['SOCKS_PROXY'] = proxy
+                    env['ALL_PROXY'] = proxy
+                elif proxy.startswith('http://') or proxy.startswith('https://'):
+                    env['HTTP_PROXY'] = proxy
+                    env['HTTPS_PROXY'] = proxy
+            
             # Use apkmirror-downloader to download the APK
-            # apkmirror-downloader <app-name> [options]
             result = subprocess.run(
-                ['apkmirror-downloader', app_name, '-d', str(download_dir)],
+                cmd,
                 capture_output=True,
                 text=True,
-                timeout=120
+                timeout=120,
+                env=env
             )
             
             self.done()
@@ -225,7 +346,7 @@ class APKManager:
             self.error(f"Download failed: {e}")
             return None
 
-    def install(self, package: str):
+    def install(self, package: str, proxy: str = None):
         """Download and install a package"""
         self.header(f"Installing: {package}")
         
@@ -245,7 +366,7 @@ class APKManager:
         except ImportError:
             pass
         
-        apk_path = self.download_apk(package)
+        apk_path = self.download_apk(package, proxy=proxy)
         
         if not apk_path or not apk_path.exists():
             self.error("Download failed")
@@ -725,6 +846,77 @@ class APKManager:
             # Silently fail - don't annoy user if offline
             pass
 
+    def config(self, args: list):
+        """Show/edit configuration including proxy settings"""
+        self.header("apk config")
+        
+        config_file = APK_PREFIX / "config.json"
+        config = {}
+        
+        # Load existing config
+        if config_file.exists():
+            try:
+                config = json.loads(config_file.read_text())
+            except Exception:
+                pass
+        
+        # Handle --edit flag
+        if args and args[0] in ('--edit', '-e'):
+            editor = os.environ.get('EDITOR', 'nano')
+            if not config_file.exists():
+                config_file.write_text(json.dumps(config, indent=2))
+            subprocess.run([editor, str(config_file)])
+            return
+        
+        # Handle --set-proxy
+        if args and args[0] == '--set-proxy':
+            if len(args) < 2:
+                print(f"{C.RED}Usage: apk config --set-proxy <proxy-url|warp|tor|none>{C.END}")
+                return
+            proxy_value = args[1]
+            if proxy_value.lower() == 'none':
+                config.pop('proxy', None)
+                print(f"{C.GREEN}Proxy removed from config{C.END}")
+            else:
+                config['proxy'] = proxy_value
+                print(f"{C.GREEN}Proxy set to: {C.CYAN}{proxy_value}{C.END}")
+            config_file.write_text(json.dumps(config, indent=2))
+            return
+        
+        # Show current config
+        print(f"{C.BOLD}Configuration:{C.END}\n")
+        print(f"  Prefix:     {APK_PREFIX}")
+        print(f"  Cellar:     {APK_CELLAR}")
+        print(f"  Cache:      {APK_CACHE}")
+        print(f"  GitHub:     {GITHUB_REPO}")
+        print(f"  Config:     {config_file}")
+        
+        # Show proxy settings
+        proxy = config.get('proxy')
+        if proxy:
+            print(f"\n  {C.BOLD}Proxy:{C.END}      {C.CYAN}{proxy}{C.END}")
+            if proxy.lower() == 'warp':
+                warp_status = "✓ running" if self._is_warp_running() else "✗ not running"
+                print(f"  WARP status: {warp_status}")
+            elif proxy.lower() == 'tor':
+                tor_status = "✓ running" if self._is_tor_running() else "✗ not running"
+                print(f"  Tor status:  {tor_status}")
+        else:
+            # Check auto-detected
+            if self._is_warp_running():
+                print(f"\n  {C.BOLD}Proxy:{C.END}      {C.GREEN}WARP (auto-detected){C.END}")
+            elif self._is_tor_running():
+                print(f"\n  {C.BOLD}Proxy:{C.END}      {C.GREEN}Tor (auto-detected){C.END}")
+            else:
+                print(f"\n  {C.BOLD}Proxy:{C.END}      {C.DIM}none configured{C.END}")
+        
+        print(f"\n{C.DIM}Commands:{C.END}")
+        print(f"  apk config --edit              Edit config in $EDITOR")
+        print(f"  apk config --set-proxy warp    Use Cloudflare WARP")
+        print(f"  apk config --set-proxy tor     Use Tor network")
+        print(f"  apk config --set-proxy none    Disable proxy")
+        print(f"  apk --proxy tor install <pkg>  One-time proxy use")
+
     def self_update(self):
         """Update apk command from GitHub"""
         self.header("Updating APK Manager")
@@ -803,12 +995,14 @@ class APKManager:
   {C.GREEN}doctor{C.END}                   Check system health
   {C.GREEN}cleanup{C.END}                  Clean cache
   {C.GREEN}config{C.END}                   Show/edit configuration
+  {C.GREEN}config --set-proxy{C.END}     Set default proxy (warp/tor/none)
 
 {C.BOLD}Global Options:{C.END}
   {C.GREEN}--help, -h{C.END}               Show this help
   {C.GREEN}--version, -v{C.END}            Show version
   {C.GREEN}--self-update{C.END}           Update this command
   {C.GREEN}--check-update{C.END}          Check for updates
+  {C.GREEN}--proxy{C.END} <url>            Use proxy (socks5://, http://, warp, tor)
 
 {C.BOLD}Examples:{C.END}
   apk install com.roblox.client       Install from repository
@@ -820,6 +1014,8 @@ class APKManager:
   apk show com.roblox.client          Show package details
   apk list                            List installed packages
   apk run com.roblox.client           Run installed package
+  apk --proxy tor install pkg         Use Tor for download
+  apk config --set-proxy warp         Auto-use WARP for all downloads
 
 {C.DIM}Sources: APKMirror{C.END}
 """)
@@ -834,8 +1030,27 @@ def main():
         APKManager().show_help()
         return
     
-    command = sys.argv[1]
-    args = sys.argv[2:]
+    # Parse global flags (--proxy, etc.) before commands
+    proxy = None
+    skip_indices = []
+    
+    for i, arg in enumerate(sys.argv[1:], start=1):
+        if arg == '--proxy' and i + 1 < len(sys.argv):
+            proxy = sys.argv[i + 1]
+            skip_indices.extend([i, i + 1])
+        elif arg.startswith('--proxy='):
+            proxy = arg.split('=', 1)[1]
+            skip_indices.append(i)
+    
+    # Filter out processed flags
+    filtered_args = [arg for i, arg in enumerate(sys.argv[1:], start=1) if i not in skip_indices]
+    
+    if not filtered_args:
+        APKManager().show_help()
+        return
+    
+    command = filtered_args[0]
+    args = filtered_args[1:]
     apk = APKManager()
     
     # Auto-check for updates (once per day, non-blocking)
@@ -855,6 +1070,14 @@ def main():
     if command == '--check-update':
         apk.check_self_update()
         return
+    if command == '--proxy':
+        # Show current proxy info
+        current_proxy = apk._get_proxy()
+        if current_proxy:
+            print(f"{C.DIM}Current proxy: {C.CYAN}{current_proxy}{C.END}")
+        else:
+            print(f"{C.DIM}No proxy configured{C.END}")
+        return
     
     # apt-style commands
     if command == 'install':
@@ -865,7 +1088,8 @@ def main():
             if is_local_apk(target):
                 apk.install_local(Path(target))
             else:
-                apk.install(target)
+                # Pass proxy to install
+                apk.install(target, proxy=proxy)
         return
     
     if command == 'remove':
