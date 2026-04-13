@@ -399,48 +399,39 @@ class APKManager:
             self.error("Download failed")
             return
         
-        self.spinner("Installing APK")
+        # Install verbose - show all output
+        print(f"{C.CYAN}▶ Installing {package}...{C.END}\n")
         
         try:
             result = subprocess.run(
                 ['python3', str(COMPAT_DIR / 'run_apk.py'), str(apk_path), '--install'],
-                cwd=str(COMPAT_DIR),
-                capture_output=True,
-                text=True
+                cwd=str(COMPAT_DIR)
             )
-            
-            self.done()
             
             if result.returncode == 0:
                 self.success(f"Installed {package}")
                 print(f"\n{C.GREEN}Run with: apk run {package}{C.END}")
             else:
                 self.error("Installation failed")
-                if result.stderr:
-                    print(result.stderr)
                     
         except Exception as e:
-            self.done()
             self.error(f"Installation error: {e}")
     
     def remove(self, package: str):
-        """Uninstall a package"""
+        """Uninstall a package (verbose)"""
         self.header(f"Removing: {package}")
         
         try:
+            print(f"{C.CYAN}▶ Uninstalling {package}...{C.END}\n")
             result = subprocess.run(
                 ['python3', str(COMPAT_DIR / 'run_apk.py'), '--uninstall', package],
-                cwd=str(COMPAT_DIR),
-                capture_output=True,
-                text=True
+                cwd=str(COMPAT_DIR)
             )
             
             if result.returncode == 0:
                 self.success(f"Removed {package}")
             else:
                 self.error(f"Failed to remove {package}")
-                if "not found" in result.stderr.lower():
-                    print(f"{C.YELLOW}Package '{package}' is not installed{C.END}")
                     
         except Exception as e:
             self.error(f"Remove error: {e}")
@@ -572,15 +563,12 @@ class APKManager:
                 self.spinner("Installing bundle")
                 
                 try:
-                    # Install base APK
+                    # Install base APK (verbose)
+                    print(f"{C.CYAN}▶ Installing base APK...{C.END}\n")
                     result = subprocess.run(
                         ['python3', str(COMPAT_DIR / 'run_apk.py'), str(base_dest), '--install'],
-                        cwd=str(COMPAT_DIR),
-                        capture_output=True,
-                        text=True
+                        cwd=str(COMPAT_DIR)
                     )
-                    
-                    self.done()
                     
                     if result.returncode == 0:
                         self.success(f"Installed {package_name}")
@@ -589,11 +577,8 @@ class APKManager:
                         print(f"\n{C.GREEN}Run with: apk run {package_name}{C.END}")
                     else:
                         self.error("Installation failed")
-                        if result.stderr:
-                            print(result.stderr)
                             
                 except Exception as e:
-                    self.done()
                     self.error(f"Installation error: {e}")
             else:
                 self.success(f"Saved bundle to Cellar")
@@ -629,25 +614,20 @@ class APKManager:
             self.spinner("Installing APK")
             
             try:
+                # Install verbose
+                print(f"{C.CYAN}▶ Installing {package_name}...{C.END}\n")
                 result = subprocess.run(
                     ['python3', str(COMPAT_DIR / 'run_apk.py'), str(dest_path), '--install'],
-                    cwd=str(COMPAT_DIR),
-                    capture_output=True,
-                    text=True
+                    cwd=str(COMPAT_DIR)
                 )
-                
-                self.done()
                 
                 if result.returncode == 0:
                     self.success(f"Installed {package_name}")
                     print(f"\n{C.GREEN}Run with: apk run {package_name}{C.END}")
                 else:
                     self.error("Installation failed")
-                    if result.stderr:
-                        print(result.stderr)
                         
             except Exception as e:
-                self.done()
                 self.error(f"Installation error: {e}")
         else:
             self.success(f"Saved {package_name} to Cellar")
@@ -745,33 +725,28 @@ class APKManager:
             self.error(f"Could not get package info: {e}")
     
     def run_app(self, package: str):
-        """Run an installed app"""
+        """Run an installed app (verbose by default)"""
         self.spinner(f"Launching {package}")
         
         try:
             # run_apk.py --run doesn't need APK arg anymore
+            # Run verbose - show all output
+            self.done()
+            print(f"{C.CYAN}▶ Running {package}...{C.END}\n")
+            
             result = subprocess.run(
                 ['python3', str(COMPAT_DIR / 'run_apk.py'), f'--run={package}'],
                 cwd=str(COMPAT_DIR),
-                capture_output=True,
-                text=True,
                 timeout=10
             )
-            self.done()
             
             if result.returncode == 0:
                 self.success(f"Launched {package}")
             else:
                 self.error(f"Launch failed (exit {result.returncode})")
-                if result.stderr:
-                    print(f"{C.DIM}{result.stderr[:200]}{C.END}")
-                if result.stdout:
-                    print(f"{C.DIM}{result.stdout[:200]}{C.END}")
         except subprocess.TimeoutExpired:
-            self.done()
             self.success(f"Launched {package} (running)")
         except Exception as e:
-            self.done()
             self.error(f"Launch failed: {e}")
     
     def update_db(self):
