@@ -73,112 +73,46 @@ class APKManager:
     def done(self):
         print(f" {C.GREEN}Done{C.END}")
     
-    def _check_playwright(self) -> bool:
-        """Check if Playwright is installed"""
-        try:
-            from playwright.sync_api import sync_playwright
-            return True
-        except ImportError:
-            return False
-    
-    def _install_playwright(self) -> bool:
-        """Install Playwright"""
-        try:
-            self.spinner("Installing Playwright")
-            subprocess.run([sys.executable, '-m', 'pip', 'install', 'playwright'], 
-                        capture_output=True, timeout=60)
-            subprocess.run([sys.executable, '-m', 'playwright', 'install', 'chromium'],
-                        capture_output=True, timeout=120)
-            self.done()
-            return True
-        except Exception as e:
-            self.done()
-            self.error(f"Failed to install Playwright: {e}")
-            return False
-
-    def search_apkmirror(self, query: str, proxy: str = None) -> List[Dict]:
-        """Search APKMirror using Playwright browser automation"""
-        self.spinner(f"Searching for '{query}' on APKMirror")
+    def search_fdroid(self, query: str, proxy: str = None) -> List[Dict]:
+        """Search F-Droid (open source app repository) - fast, no bot protection"""
+        self.spinner(f"Searching F-Droid for '{query}'")
         
-        # Check/install Playwright
-        if not self._check_playwright():
-            self.done()
-            self.info("Installing Playwright browser...")
-            if not self._install_playwright():
-                self.error("Could not install Playwright")
-                return []
-            self.spinner(f"Searching for '{query}' on APKMirror")
-        
-        # Get proxy if not provided
+        # Get proxy if not provided  
         if not proxy:
             proxy = self._get_proxy()
         
         try:
-            from playwright.sync_api import sync_playwright
+            # F-Droid has a simple search API
+            search_url = f"https://search.f-droid.org/?q={urllib.parse.quote(query)}"
+            
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+                'Accept': 'application/json, text/html',
+            }
+            
+            req = urllib.request.Request(search_url, headers=headers)
+            
+            with urllib.request.urlopen(req, timeout=10) as response:
+                html = response.read().decode('utf-8')
+            
+            # Parse F-Droid search results
+            results = []
             import re
             
-            search_url = f"https://www.apkmirror.com/?s={urllib.parse.quote(query)}&post_type=app_release"
+            # Find package entries in search results
+            # F-Droid format: package-name - App Name
+            app_pattern = r'<a[^>]*href="/packages/([^"]+)/"[^>]*>.*?<h4[^>]*>([^<]+)</h4>.*?<p[^>]*>([^<]*)</p>.*?</a>'
+            matches = re.findall(app_pattern, html, re.DOTALL | re.IGNORECASE)
             
-            with sync_playwright() as p:
-                # Launch browser with proxy if specified
-                browser_args = {
-                    'headless': True,
-                }
-                
-                if proxy and proxy.startswith('socks5://'):
-                    # Playwright doesn't support SOCKS5 directly, skip for now
-                    pass
-                elif proxy and (proxy.startswith('http://') or proxy.startswith('https://')):
-                    browser_args['proxy'] = {'server': proxy}
-                
-                browser = p.chromium.launch(**browser_args)
-                context = browser.new_context(
-                    user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                )
-                page = context.new_page()
-                
-                # Navigate to search page
-                page.goto(search_url, wait_until='networkidle', timeout=30000)
-                
-                # Wait for results to load
-                page.wait_for_selector('.appRow', timeout=10000)
-                
-                # Extract results
-                results = []
-                app_rows = page.query_selector_all('.appRow')
-                
-                for row in app_rows[:10]:
-                    try:
-                        # Get app name
-                        name_el = row.query_selector('h5 a')
-                        if not name_el:
-                            continue
-                        name = name_el.inner_text().strip()
-                        href = name_el.get_attribute('href') or ''
-                        
-                        # Get developer
-                        dev_el = row.query_selector('.developer')
-                        developer = dev_el.inner_text().strip() if dev_el else 'Unknown'
-                        
-                        # Extract package from URL
-                        pkg_match = re.search(r'/apk/([^/]+)/([^/]+)/', href)
-                        if pkg_match:
-                            package = f"com.{pkg_match.group(1)}.{pkg_match.group(2)}"
-                        else:
-                            package = name.lower().replace(' ', '.').replace('-', '.')
-                        
-                        results.append({
-                            "name": name,
-                            "package": package,
-                            "developer": developer,
-                            "version": "latest",
-                            "source": "apkmirror",
-                            "url": f"https://www.apkmirror.com{href}"
-                        })
-                    except Exception:
-                        continue
-                
-                browser.close()
+            for package, name, summary in matches[:15]:
+                results.append({
+                    "name": name.strip(),
+                    "package": package.strip(),
+                    "developer": summary.strip() if summary else 'F-Droid',
+                    "version": "latest",
+                    "source": "fdroid",
+                    "url": f"https://f-droid.org/packages/{package}/"
+                })
             
             self.done()
             return results
@@ -189,10 +123,10 @@ class APKManager:
             return []
     
     def search(self, query: str, proxy: str = None):
-        """Search for apps with optional proxy"""
+        """Search for apps with optional proxy (uses F-Droid - fast, no bot detection)"""
         self.header(f"Searching: {query}")
         
-        results = self.search_apkmirror(query, proxy=proxy)
+        results = self.search_fdroid(query, proxy=proxy)
         
         if not results:
             print(f"{C.YELLOW}No packages found matching '{query}'{C.END}")
@@ -1249,7 +1183,7 @@ class APKManager:
   apk list                            List installed packages
   apk run com.roblox.client           Run installed package
 
-{C.DIM}Sources: APKMirror{C.END}
+{C.DIM}Sources: F-Droid (open source){C.END}
 """)
 
 def is_local_apk(path: str) -> bool:
