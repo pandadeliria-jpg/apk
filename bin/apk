@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""APK Manager (apk) - Linux-style package manager for Android APKs on macOS
+"""APK Manager (apk) - apt-style package manager for Android APKs on macOS
 Uses APKMirror and other sources to download and install APKs
+Inspired by Debian/Ubuntu's apt and Homebrew
 """
 import sys
 import os
@@ -9,7 +10,6 @@ import json
 import re
 import urllib.request
 import urllib.parse
-import argparse
 from pathlib import Path
 from typing import List, Dict, Optional
 
@@ -262,6 +262,136 @@ class APKManager:
         except Exception as e:
             self.error(f"Remove error: {e}")
     
+    def purge(self, package: str):
+        """Remove package and all its data (apt purge style)"""
+        self.header(f"Purging: {package}")
+        
+        # Remove from Cellar
+        app_dir = APK_CELLAR / package
+        if app_dir.exists():
+            import shutil
+            shutil.rmtree(app_dir)
+            self.success(f"Removed {package} from Cellar")
+        
+        # Remove from runtime with --purge flag if available
+        if COMPAT_DIR.exists():
+            try:
+                result = subprocess.run(
+                    ['python3', str(COMPAT_DIR / 'run_apk.py'), '--uninstall', package, '--purge'],
+                    cwd=str(COMPAT_DIR),
+                    capture_output=True,
+                    text=True
+                )
+                
+                if result.returncode == 0:
+                    self.success(f"Purged {package} completely")
+                else:
+                    # Fallback to regular remove
+                    result = subprocess.run(
+                        ['python3', str(COMPAT_DIR / 'run_apk.py'), '--uninstall', package],
+                        cwd=str(COMPAT_DIR),
+                        capture_output=True,
+                        text=True
+                    )
+                    if result.returncode == 0:
+                        self.success(f"Removed {package}")
+                        
+            except Exception as e:
+                self.error(f"Purge error: {e}")
+        
+        print(f"\n{C.DIM}Package '{package}' has been completely removed{C.END}")
+    
+    def install_local(self, apk_path: Path):
+        """Install a local APK file (apt install ./file.apk style)"""
+        self.header(f"Installing local APK: {apk_path.name}")
+        
+        if not apk_path.exists():
+            self.error(f"File not found: {apk_path}")
+            return
+        
+        # Try to extract package name from APK filename or metadata
+        package_name = apk_path.stem.replace('_', '.')
+        
+        # Install to Cellar
+        app_dir = APK_CELLAR / package_name
+        app_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Copy APK to Cellar
+        dest_path = app_dir / f"{package_name}.apk"
+        import shutil
+        shutil.copy(apk_path, dest_path)
+        
+        self.success(f"Copied {apk_path.name} to Cellar")
+        
+        # Install via runtime if available
+        if COMPAT_DIR.exists():
+            self.spinner("Installing APK")
+            
+            try:
+                result = subprocess.run(
+                    ['python3', str(COMPAT_DIR / 'run_apk.py'), str(dest_path), '--install'],
+                    cwd=str(COMPAT_DIR),
+                    capture_output=True,
+                    text=True
+                )
+                
+                self.done()
+                
+                if result.returncode == 0:
+                    self.success(f"Installed {package_name}")
+                    print(f"\n{C.GREEN}Run with: apk run {package_name}{C.END}")
+                else:
+                    self.error("Installation failed")
+                    if result.stderr:
+                        print(result.stderr)
+                        
+            except Exception as e:
+                self.done()
+                self.error(f"Installation error: {e}")
+        else:
+            self.success(f"Saved {package_name} to Cellar")
+            self.info("Install runtime not available. APK saved to Cellar.")
+    
+    def autoremove(self):
+        """Remove automatically installed packages that are no longer needed"""
+        self.header("Autoremove")
+        
+        # Check Cellar for orphaned packages (no runtime entry)
+        orphaned = []
+        
+        if APK_CELLAR.exists() and COMPAT_DIR.exists():
+            sys.path.insert(0, str(COMPAT_DIR / "runtime"))
+            try:
+                from app_manager import get_app_manager
+                app_mgr = get_app_manager()
+                runtime_packages = {app.package_name for app in app_mgr.list_apps()}
+                
+                for app_dir in APK_CELLAR.iterdir():
+                    if app_dir.is_dir() and app_dir.name not in runtime_packages:
+                        orphaned.append(app_dir.name)
+                        
+            except ImportError:
+                pass
+        
+        if not orphaned:
+            print(f"{C.GREEN}No orphaned packages to remove{C.END}")
+            return
+        
+        print(f"{C.BOLD}The following packages will be removed:{C.END}")
+        for pkg in orphaned:
+            print(f"  {C.YELLOW}{pkg}{C.END}")
+        
+        response = input(f"\n{C.YELLOW}Continue? [Y/n]: {C.END}").strip().lower()
+        if response in ('', 'y', 'yes'):
+            for pkg in orphaned:
+                app_dir = APK_CELLAR / pkg
+                if app_dir.exists():
+                    import shutil
+                    shutil.rmtree(app_dir)
+                    self.success(f"Removed {pkg}")
+        else:
+            print("Cancelled.")
+    
     def list_installed(self):
         """List installed packages"""
         self.header("Installed Packages")
@@ -456,118 +586,169 @@ class APKManager:
         print(f"{C.DIM}GitHub: https://github.com/pandadeliria-jpg/robloxgen{C.END}")
     
     def show_help(self):
-        """Show pacman-style help"""
+        """Show apt-style help"""
         print(f"""
 {C.CYAN}{'═'*60}{C.END}
 {C.BOLD}{C.CYAN}  📦 APK Manager (apk) - v{VERSION}{C.END}
-{C.DIM}  pacman-style package manager for Android APKs{C.END}
+{C.DIM}  apt-style package manager for Android APKs{C.END}
 {C.CYAN}{'═'*60}{C.END}
 
-{C.BOLD}Usage:{C.END} apk [options] [targets]
+{C.BOLD}Usage:{C.END} apk <command> [options] [targets]
 
-{C.BOLD}Operations:{C.END}
-  {C.GREEN}-S, --sync{C.END} [pkg...]      Synchronize (install/update) packages
-  {C.GREEN}-R, --remove{C.END} [pkg...]   Remove package(s)
-  {C.GREEN}-Q, --query{C.END}             Query the package database
-  {C.GREEN}-U, --upgrade{C.END} [pkg...]  Upgrade package(s)
-  {C.GREEN}-V, --version{C.END}            Display version and exit
-  {C.GREEN}-h, --help{C.END}              Display this help message
+{C.BOLD}Commands:{C.END}
+  {C.GREEN}install{C.END} <pkg|file.apk>  Install package from repo or local file
+  {C.GREEN}remove{C.END} <package>        Remove package
+  {C.GREEN}purge{C.END} <package>          Remove package and config files
+  {C.GREEN}search{C.END} <query>          Search for packages
+  {C.GREEN}update{C.END}                  Update package database
+  {C.GREEN}upgrade{C.END} [packages]      Upgrade all or specific packages
+  {C.GREEN}full-upgrade{C.END}            Update and upgrade (dist-upgrade)
+  {C.GREEN}show{C.END} <package>          Display package information
+  {C.GREEN}list{C.END}                     List installed packages
+  {C.GREEN}run{C.END} <package>           Run an installed package
+  {C.GREEN}autoremove{C.END}             Remove orphaned packages
 
-{C.BOLD}Sync Options (-S):{C.END}
-  {C.GREEN}-s, --search{C.END} <query>    Search remote repositories
-  {C.GREEN}-y, --refresh{C.END}           Download fresh package database
-  {C.GREEN}-u, --sysupgrade{C.END}       Upgrade all packages
+{C.BOLD}Maintenance (Homebrew-style):{C.END}
+  {C.GREEN}doctor{C.END}                   Check system health
+  {C.GREEN}cleanup{C.END}                  Clean cache
+  {C.GREEN}config{C.END}                   Show/edit configuration
 
-{C.BOLD}Query Options (-Q):{C.END}
-  {C.GREEN}-i, --info{C.END}              Display package information
-
-{C.BOLD}Self-Update:{C.END}
-  {C.GREEN}--self-update{C.END}           Update this command from GitHub
+{C.BOLD}Global Options:{C.END}
+  {C.GREEN}--help, -h{C.END}               Show this help
+  {C.GREEN}--version, -v{C.END}            Show version
+  {C.GREEN}--self-update{C.END}           Update this command
   {C.GREEN}--check-update{C.END}          Check for updates
 
 {C.BOLD}Examples:{C.END}
-  apk -S com.roblox.client      Install Roblox
-  apk -Ss roblox                Search for Roblox
-  apk -R com.roblox.client      Uninstall Roblox
-  apk -Q                        List installed packages
-  apk -Qi com.roblox.client     Show package info
-  apk -Syu                      Update database and upgrade all
-  apk -U com.roblox.client      Upgrade specific package
+  apk install com.roblox.client       Install from repository
+  apk install ./app.apk               Install local APK file
+  apk search roblox                   Search for packages
+  apk remove com.roblox.client        Uninstall package
+  apk update && apk upgrade           Update and upgrade
+  apk show com.roblox.client          Show package details
+  apk list                            List installed packages
+  apk run com.roblox.client           Run installed package
 
 {C.DIM}Sources: APKMirror{C.END}
 """)
 
+def is_local_apk(path: str) -> bool:
+    """Check if path is a local APK file"""
+    return path.endswith('.apk') and Path(path).exists()
+
 def main():
-    parser = argparse.ArgumentParser(description='APK Manager - pacman-style package manager', add_help=False)
-    parser.add_argument('-S', '--sync', action='store_true', help='Synchronize packages')
-    parser.add_argument('-R', '--remove', action='store_true', help='Remove packages')
-    parser.add_argument('-Q', '--query', action='store_true', help='Query package database')
-    parser.add_argument('-U', '--upgrade', action='store_true', help='Upgrade packages')
-    parser.add_argument('-V', '--version', action='store_true', help='Show version')
-    parser.add_argument('-h', '--help', action='store_true', help='Show help')
-    parser.add_argument('-s', '--search', action='store_true', help='Search packages')
-    parser.add_argument('-y', '--refresh', action='store_true', help='Refresh database')
-    parser.add_argument('-u', '--sysupgrade', action='store_true', help='System upgrade')
-    parser.add_argument('-i', '--info', action='store_true', help='Package info')
-    parser.add_argument('--self-update', action='store_true', help='Self update')
-    parser.add_argument('--check-update', action='store_true', help='Check for updates')
-    parser.add_argument('--run', action='store_true', help='Run package')
-    parser.add_argument('targets', nargs='*', help='Package names or search queries')
-
-    args = parser.parse_args()
+    # apt-style command parsing
+    if len(sys.argv) < 2:
+        APKManager().show_help()
+        return
+    
+    command = sys.argv[1]
+    args = sys.argv[2:]
     apk = APKManager()
-
-    if args.self_update:
-        apk.self_update()
-        return
-    if args.check_update:
-        apk.check_self_update()
-        return
-    if args.version:
+    
+    # Global flags that can come before or after commands
+    if command in ('--version', '-v'):
         apk.show_version()
         return
-    if args.help or (not args.sync and not args.remove and not args.query and not args.upgrade and not args.targets):
+    if command in ('--help', '-h'):
         apk.show_help()
         return
-    if args.sync:
-        if args.search:
-            if args.targets:
-                apk.search(args.targets[0])
+    if command == '--self-update':
+        apk.self_update()
+        return
+    if command == '--check-update':
+        apk.check_self_update()
+        return
+    
+    # apt-style commands
+    if command == 'install':
+        if not args:
+            apk.error("Usage: apk install <package|file.apk>")
+            return
+        for target in args:
+            if is_local_apk(target):
+                apk.install_local(Path(target))
             else:
-                apk.error("No search query specified")
-        elif args.sysupgrade:
-            apk.update_db()
+                apk.install(target)
+        return
+    
+    if command == 'remove':
+        if not args:
+            apk.error("Usage: apk remove <package>")
+            return
+        for pkg in args:
+            apk.remove(pkg)
+        return
+    
+    if command == 'purge':
+        if not args:
+            apk.error("Usage: apk purge <package>")
+            return
+        for pkg in args:
+            apk.purge(pkg)
+        return
+    
+    if command == 'search':
+        if not args:
+            apk.error("Usage: apk search <query>")
+            return
+        apk.search(args[0])
+        return
+    
+    if command == 'update':
+        apk.update_db()
+        return
+    
+    if command == 'upgrade':
+        if args:
+            # Upgrade specific packages
+            for pkg in args:
+                apk.install(pkg)  # Reinstall/upgrade
+        else:
             apk.upgrade()
-        else:
-            if args.targets:
-                for pkg in args.targets:
-                    apk.install(pkg)
-            else:
-                apk.error("No packages specified for installation")
         return
-    if args.remove:
-        if args.targets:
-            for pkg in args.targets:
-                apk.remove(pkg)
-        else:
-            apk.error("No packages specified for removal")
+    
+    if command == 'show':
+        if not args:
+            apk.error("Usage: apk show <package>")
+            return
+        apk.show_package_info(args[0])
         return
-    if args.query:
-        query = args.targets[0] if args.targets else None
-        if not query:
-            apk.list_installed()
-        elif args.info:
-            apk.show_package_info(query)
-        else:
-            apk.list_installed()
+    
+    if command == 'list':
+        apk.list_installed()
         return
-    if args.upgrade:
+    
+    if command == 'run':
+        if not args:
+            apk.error("Usage: apk run <package>")
+            return
+        apk.run_app(args[0])
+        return
+    
+    if command == 'autoremove':
+        apk.autoremove()
+        return
+    
+    if command == 'full-upgrade':
+        apk.update_db()
         apk.upgrade()
         return
-    if args.run and args.targets:
-        apk.run_app(args.targets[0])
+    
+    # Homebrew-style maintenance commands
+    if command == 'doctor':
+        apk.doctor()
         return
-    apk.show_help()
+    if command == 'cleanup':
+        apk.cleanup()
+        return
+    if command == 'config':
+        apk.config(args)
+        return
+    
+    # Unknown command
+    apk.error(f"Unknown command: {command}")
+    print(f"{C.DIM}Run 'apk --help' for usage{C.END}")
 
 if __name__ == "__main__":
     main()
