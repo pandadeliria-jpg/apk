@@ -141,22 +141,31 @@ class AppManager:
         # Fallback: use APK filename for package name
         if not package_name:
             # Convert filename to package-like name
-            # e.g., "google-play-50-8-18.apk" -> "com.google.play"
-            base_name = apk_path.stem.lower()
-            # Remove common suffixes
-            for suffix in ['.apk', '-release', '-debug', '-signed', '-unsigned']:
-                base_name = base_name.replace(suffix, '')
-            # Try to detect common package patterns
-            if 'google' in base_name and 'play' in base_name:
-                package_name = 'com.google.android.play'
-            elif 'roblox' in base_name:
-                package_name = 'com.roblox.client'
-            elif 'minecraft' in base_name:
-                package_name = 'com.mojang.minecraftpe'
+            # e.g., "com.termux.apk" -> "com.termux"
+            base_name = apk_path.stem
+            
+            # If filename looks like a package (has dots), use it directly
+            if '.' in base_name and len(base_name.split('.')) >= 2:
+                # Remove common suffixes but preserve dots
+                package_name = base_name
+                for suffix in ['-release', '-debug', '-signed', '-unsigned']:
+                    package_name = package_name.replace(suffix, '')
+                package_name = package_name.lower()
             else:
-                # Convert to com.<name>.app format
-                clean_name = re.sub(r'[^a-z0-9]', '', base_name)[:20]
-                package_name = f"com.app.{clean_name}" if clean_name else f"com.app.{apk_path.stem[:20]}"
+                # Convert filename to package-like name
+                # e.g., "google-play-50-8-18.apk" -> "com.google.play"
+                base_name = base_name.lower()
+                # Try to detect common package patterns
+                if 'google' in base_name and 'play' in base_name:
+                    package_name = 'com.google.android.play'
+                elif 'roblox' in base_name:
+                    package_name = 'com.roblox.client'
+                elif 'minecraft' in base_name:
+                    package_name = 'com.mojang.minecraftpe'
+                else:
+                    # Convert to com.<name>.app format
+                    clean_name = re.sub(r'[^a-z0-9]', '', base_name)[:20]
+                    package_name = f"com.app.{clean_name}" if clean_name else f"com.app.{apk_path.stem[:20]}"
             
             version_code = 1
             version_name = '1.0'
