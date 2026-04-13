@@ -132,72 +132,99 @@ class APKManager:
         
         print(f"{C.DIM}Install with: apk install <package-name>{C.END}")
     
+    def _check_apkmirror_downloader(self) -> bool:
+        """Check if apkmirror-downloader is installed"""
+        try:
+            result = subprocess.run(
+                ['which', 'apkmirror-downloader'],
+                capture_output=True,
+                text=True
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+    
+    def _install_apkmirror_downloader(self) -> bool:
+        """Install apkmirror-downloader via npm"""
+        try:
+            self.spinner("Installing apkmirror-downloader")
+            result = subprocess.run(
+                ['npm', 'install', '-g', 'apkmirror-downloader'],
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+            self.done()
+            return result.returncode == 0
+        except Exception as e:
+            self.done()
+            self.error(f"Failed to install apkmirror-downloader: {e}")
+            return False
+
     def download_apk(self, package: str, url: str = None) -> Optional[Path]:
-        """Download APK from APKMirror"""
+        """Download APK from APKMirror using apkmirror-downloader"""
         self.spinner(f"Downloading {package}")
 
-        download_path = CACHE_DIR / f"{package.replace('.', '_')}.apk"
-
-        try:
-            if url:
-                urllib.request.urlretrieve(url, download_path)
-            else:
-                if package == "com.roblox.client":
-                    download_url = self._get_roblox_apk()
-                    if download_url:
-                        urllib.request.urlretrieve(download_url, download_path)
-                    else:
-                        self.done()
-                        self.error("Could not find Roblox APK download link")
-                        return None
-                else:
-                    self.done()
-                    self.error(f"APK download not implemented for {package}")
-                    self.info("Supported packages: com.roblox.client")
-                    return None
-
+        # Check for apkmirror-downloader
+        if not self._check_apkmirror_downloader():
             self.done()
-            self.info(f"Downloaded to {download_path}")
-            return download_path
+            self.info("Installing apkmirror-downloader...")
+            if not self._install_apkmirror_downloader():
+                self.error("Could not install apkmirror-downloader")
+                self.info("Install manually: npm install -g apkmirror-downloader")
+                return None
+            self.spinner(f"Downloading {package}")
 
+        # Extract app name from package (e.g., com.roblox.client -> roblox)
+        app_name = package.split('.')[-1]
+        
+        # Create download directory
+        download_dir = APK_CACHE / "downloads"
+        download_dir.mkdir(parents=True, exist_ok=True)
+        
+        try:
+            # Use apkmirror-downloader to download the APK
+            # apkmirror-downloader <app-name> [options]
+            result = subprocess.run(
+                ['apkmirror-downloader', app_name, '-d', str(download_dir)],
+                capture_output=True,
+                text=True,
+                timeout=120
+            )
+            
+            self.done()
+            
+            if result.returncode != 0:
+                self.error(f"Download failed: {result.stderr}")
+                return None
+            
+            # Find the downloaded APK file
+            apk_files = list(download_dir.glob("*.apk"))
+            if not apk_files:
+                self.error("No APK file found after download")
+                return None
+            
+            # Use the most recently downloaded file
+            download_path = max(apk_files, key=lambda p: p.stat().st_mtime)
+            
+            # Rename to standardized name
+            final_path = download_dir / f"{package.replace('.', '_')}.apk"
+            import shutil
+            shutil.move(str(download_path), str(final_path))
+            
+            self.success(f"Downloaded {package}")
+            self.info(f"Saved to {final_path}")
+            return final_path
+
+        except subprocess.TimeoutExpired:
+            self.done()
+            self.error("Download timed out")
+            return None
         except Exception as e:
             self.done()
             self.error(f"Download failed: {e}")
             return None
 
-    def _get_roblox_apk(self) -> Optional[str]:
-        """Get direct download URL for Roblox from APKMirror"""
-        try:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.0'
-            }
-
-            req = urllib.request.Request(
-                "https://www.apkmirror.com/apk/roblox-corporation/roblox/",
-                headers=headers
-            )
-
-            with urllib.request.urlopen(req, timeout=10) as response:
-                html = response.read().decode('utf-8')
-                match = re.search(r'href="(/wp-content/themes/APKMirror/download\.php\?id=\d+)"', html)
-
-                if match:
-                    download_page = "https://www.apkmirror.com" + match.group(1)
-
-                    req2 = urllib.request.Request(download_page, headers=headers)
-                    with urllib.request.urlopen(req2, timeout=10) as response2:
-                        html2 = response2.read().decode('utf-8')
-                        match2 = re.search(r'href="(https://[^"]+\.apk)"', html2)
-                        if match2:
-                            return match2.group(1)
-                        match3 = re.search(r'data-href="(https://[^"]+\.apk)"', html2)
-                        if match3:
-                            return match3.group(1)
-
-            return None
-        except Exception as e:
-            return None
-    
     def install(self, package: str):
         """Download and install a package"""
         self.header(f"Installing: {package}")
