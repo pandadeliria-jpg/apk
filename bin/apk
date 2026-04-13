@@ -322,114 +322,63 @@ class APKManager:
             self.error(f"Failed to install apkmirror-downloader: {e}")
             return False
 
-    def download_apk(self, package: str, url: str = None, proxy: str = None) -> Optional[Path]:
-        """Download APK from APKMirror using apkmirror-downloader with proxy support"""
-        self.spinner(f"Downloading {package}")
-        
-        # Get proxy if not provided
-        if not proxy:
-            proxy = self._get_proxy()
-        
-        # Show proxy info
-        if proxy:
-            self.done()
-            if proxy == 'warp://active':
-                self.info(f"Using {C.CYAN}WARP VPN{C.END} (system-level)")
-            else:
-                proxy_type = proxy.split(':')[0].upper()
-                self.info(f"Using {proxy_type} proxy: {proxy}")
-            self.spinner(f"Downloading {package}")
-
-        # Check for apkmirror-downloader
-        if not self._check_apkmirror_downloader():
-            self.done()
-            self.info("Installing apkmirror-downloader...")
-            if not self._install_apkmirror_downloader():
-                self.error("Could not install apkmirror-downloader")
-                self.info("Install manually: npm install -g apkmirror-downloader")
-                return None
-            # Verify installation worked
-            if not self._check_apkmirror_downloader():
-                self.error("apkmirror-downloader installed but not found in PATH")
-                self.info("Try: npm install -g apkmirror-downloader")
-                return None
-            self.spinner(f"Downloading {package}")
-
-        # Extract app name from package (e.g., com.roblox.client -> roblox)
-        app_name = package.split('.')[-1]
+    def download_apk_fdroid(self, package: str) -> Optional[Path]:
+        """Download APK from F-Droid (direct download, no proxy needed)"""
+        self.spinner(f"Downloading {package} from F-Droid")
         
         # Create download directory
         download_dir = APK_CACHE / "downloads"
         download_dir.mkdir(parents=True, exist_ok=True)
         
         try:
-            # Get apkmirror-downloader command (direct or via npx)
-            base_cmd = self._get_apkmirror_downloader_cmd()
-            if not base_cmd:
-                self.done()
-                self.error("apkmirror-downloader not found. Install: npm install -g apkmirror-downloader")
-                return None
+            # Get download URL from F-Droid
+            # F-Droid URL format: https://f-droid.org/repo/{package}_{version}.apk
+            # First, get the latest version info
+            import urllib.request
+            import json
             
-            # Build full command
-            cmd = base_cmd + [app_name, '-d', str(download_dir)]
+            # Try to get package info from F-Droid
+            index_url = "https://f-droid.org/api/v1/index.json"
+            headers = {'User-Agent': 'Mozilla/5.0'}
             
-            # Set proxy environment variable if available
-            env = os.environ.copy()
-            if proxy:
-                if proxy == 'warp://active':
-                    # WARP is active at system level - no proxy env vars needed
-                    pass
-                elif proxy.startswith('socks5://'):
-                    env['SOCKS_PROXY'] = proxy
-                    env['ALL_PROXY'] = proxy
-                elif proxy.startswith('http://') or proxy.startswith('https://'):
-                    env['HTTP_PROXY'] = proxy
-                    env['HTTPS_PROXY'] = proxy
+            req = urllib.request.Request(index_url, headers=headers)
+            with urllib.request.urlopen(req, timeout=30) as response:
+                data = json.loads(response.read().decode('utf-8'))
             
-            # Use apkmirror-downloader to download the APK
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=120,
-                env=env
-            )
+            # Find the package
+            for app in data.get('apps', []):
+                if app.get('packageName') == package:
+                    # Get suggested version code
+                    version_code = app.get('suggestedVersionCode')
+                    if version_code:
+                        # Build download URL
+                        apk_url = f"https://f-droid.org/repo/{package}_{version_code}.apk"
+                        
+                        self.done()
+                        self.spinner(f"Downloading APK from F-Droid")
+                        
+                        # Download the APK
+                        output_path = download_dir / f"{package.replace('.', '_')}.apk"
+                        
+                        req = urllib.request.Request(apk_url, headers=headers)
+                        with urllib.request.urlopen(req, timeout=60) as response:
+                            with open(output_path, 'wb') as f:
+                                f.write(response.read())
+                        
+                        self.done()
+                        return output_path
             
             self.done()
-            
-            if result.returncode != 0:
-                self.error(f"Download failed: {result.stderr}")
-                return None
-            
-            # Find the downloaded APK file
-            apk_files = list(download_dir.glob("*.apk"))
-            if not apk_files:
-                self.error("No APK file found after download")
-                return None
-            
-            # Use the most recently downloaded file
-            download_path = max(apk_files, key=lambda p: p.stat().st_mtime)
-            
-            # Rename to standardized name
-            final_path = download_dir / f"{package.replace('.', '_')}.apk"
-            import shutil
-            shutil.move(str(download_path), str(final_path))
-            
-            self.success(f"Downloaded {package}")
-            self.info(f"Saved to {final_path}")
-            return final_path
-
-        except subprocess.TimeoutExpired:
-            self.done()
-            self.error("Download timed out")
+            self.error(f"Package '{package}' not found in F-Droid repository")
             return None
+            
         except Exception as e:
             self.done()
             self.error(f"Download failed: {e}")
             return None
 
     def install(self, package: str, proxy: str = None):
-        """Download and install a package"""
+        """Download and install a package from F-Droid (no proxy needed)"""
         self.header(f"Installing: {package}")
         
         sys.path.insert(0, str(COMPAT_DIR / "runtime"))
@@ -439,7 +388,7 @@ class APKManager:
             
             for app in app_mgr.list_apps():
                 if package in app.package_name:
-                    self.warning(f"{app.name} is already installed ({app.version_name})")
+                    self.warning(f"{app.app_name} is already installed ({app.version_name})")
                     response = input(f"{C.YELLOW}Reinstall? [y/N]: {C.END}").strip().lower()
                     if response != 'y':
                         print("Installation cancelled.")
@@ -448,7 +397,8 @@ class APKManager:
         except ImportError:
             pass
         
-        apk_path = self.download_apk(package, proxy=proxy)
+        # F-Droid doesn't need proxy - direct download
+        apk_path = self.download_apk_fdroid(package)
         
         if not apk_path or not apk_path.exists():
             self.error("Download failed")
