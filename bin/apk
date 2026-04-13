@@ -903,11 +903,11 @@ class APKManager:
         self.spinner("Checking WARP VPN")
         if self._is_warp_running():
             self.done()
-            print(f"  {C.GREEN}✓{C.END} WARP VPN active")
+            print(f"  {C.GREEN}✓{C.END} WARP VPN connected and active")
             checks_passed += 1
         else:
             self.done()
-            print(f"  {C.DIM}○{C.END} WARP VPN not active (optional)")
+            print(f"  {C.DIM}○{C.END} WARP not connected (open WARP app and toggle on)")
         
         # Check 4: Tor status
         checks_total += 1
@@ -1044,7 +1044,7 @@ class APKManager:
         if proxy:
             print(f"\n  {C.BOLD}Proxy:{C.END}      {C.CYAN}{proxy}{C.END}")
             if proxy.lower() == 'warp':
-                warp_status = "✓ running" if self._is_warp_running() else "✗ not running"
+                warp_status = "✓ connected" if self._is_warp_running() else "✗ not connected (toggle WARP on)"
                 print(f"  WARP status: {warp_status}")
             elif proxy.lower() == 'tor':
                 tor_status = "✓ running" if self._is_tor_running() else "✗ not running"
