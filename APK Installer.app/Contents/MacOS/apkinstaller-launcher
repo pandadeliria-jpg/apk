@@ -1,0 +1,55 @@
+#!/bin/bash
+# Terminal launcher for APK Installer
+# Opens Terminal.app and runs the colored installer
+
+# Get the APK file path from arguments or Finder selection
+APK_FILE="$1"
+
+# If no file passed, try to get from Finder selection
+if [ -z "$APK_FILE" ] || [ ! -f "$APK_FILE" ]; then
+    APK_FILE=$(osascript <<'OSA' 2>/dev/null
+        tell application "Finder"
+            try
+                set theSelection to selection
+                if (count theSelection) > 0 then
+                    set selectedItem to item 1 of theSelection as alias
+                    return POSIX path of selectedItem
+                end if
+            on error
+            end try
+        end tell
+        return ""
+OSA
+    )
+fi
+
+# Get script directory
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+APP_BUNDLE="$(dirname "$SCRIPT_DIR")"
+COMPAT_DIR="$(dirname "$APP_BUNDLE")"
+
+if [[ "$COMPAT_DIR" == *"APK Installer.app"* ]]; then
+    COMPAT_DIR="/Users/danuta/robloxgen/android_compat"
+fi
+
+INSTALLER_SCRIPT="$SCRIPT_DIR/apkinstaller"
+
+# Build the command
+if [ -n "$APK_FILE" ] && [ -f "$APK_FILE" ]; then
+    # Have APK file - install it
+    CMD="cd \"$COMPAT_DIR\" && \"$INSTALLER_SCRIPT\" \"$APK_FILE\""
+else
+    # No APK - will ask user to select
+    CMD="cd \"$COMPAT_DIR\" && \"$INSTALLER_SCRIPT\""
+fi
+
+# Open Terminal and run
+osascript <<OSA
+tell application "Terminal"
+    activate
+    set newWindow to do script "$CMD"
+    set custom title of front window to "🚀 APK Installer"
+end tell
+OSA
+
+exit 0

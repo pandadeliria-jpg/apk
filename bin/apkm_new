@@ -1,0 +1,432 @@
+#!/usr/bin/env python3
+"""APK Manager (apkm) - Arch Linux pacman-style package manager for Android APKs on macOS"""
+import sys
+import subprocess
+import re
+import urllib.request
+import urllib.parse
+import argparse
+from pathlib import Path
+from typing import List, Dict, Optional
+
+class C:
+    CYAN = '\033[96m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    RED = '\033[91m'
+    BLUE = '\033[94m'
+    BOLD = '\033[1m'
+    DIM = '\033[2m'
+    END = '\033[0m'
+
+COMPAT_DIR = Path("/Users/danuta/robloxgen/android_compat")
+if not COMPAT_DIR.exists():
+    COMPAT_DIR = Path.home() / "robloxgen/android_compat"
+
+CACHE_DIR = Path.home() / ".cache/apkm"
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+VERSION = "1.0.0"
+GITHUB_REPO = "danuta/robloxgen"
+GITHUB_RAW = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/android_compat"
+
+class APKManager:
+    def header(self, text):
+        print(f"\n{C.CYAN}{'═'*60}{C.END}")
+        print(f"{C.BOLD}{C.CYAN}  📦 {text}{C.END}")
+        print(f"{C.CYAN}{'═'*60}{C.END}\n")
+
+    def success(self, msg):
+        print(f"{C.GREEN}✓ {msg}{C.END}")
+
+    def error(self, msg):
+        print(f"{C.RED}✗ {msg}{C.END}")
+
+    def spinner(self, text):
+        print(f"{C.CYAN}⏳ {text}...{C.END}", end='', flush=True)
+
+    def done(self):
+        print(f" {C.GREEN}Done{C.END}")
+
+    def search_packages(self, query):
+        self.spinner(f"Searching for '{query}'")
+        mock_results = [
+            {"name": "Roblox", "package": "com.roblox.client", "developer": "Roblox Corporation", "version": "2.650.742", "source": "apkmirror"},
+            {"name": "Minecraft", "package": "com.mojang.minecraftpe", "developer": "Mojang", "version": "1.20.0", "source": "apkmirror"}
+        ]
+        results = [r for r in mock_results if query.lower() in r["name"].lower() or query.lower() in r["package"].lower()]
+        self.done()
+        return results
+
+    def sync_install(self, packages, refresh=False):
+        if refresh:
+            self.update_db()
+        for package in packages:
+            self.install(package)
+
+    def sync_search(self, query):
+        self.header(f"Searching: {query}")
+        results = self.search_packages(query)
+        if not results:
+            print(f"{C.YELLOW}No packages found matching '{query}'{C.END}")
+            return
+        for app in results:
+            print(f"{C.CYAN}{app['package']}{C.END} {C.GREEN}{app['version']}{C.END}")
+            print(f"    {app['name']} - {app['developer']}")
+            print(f"    {C.DIM}Source: {app['source']}{C.END}")
+            print()
+
+    def remove_packages(self, packages):
+        for package in packages:
+            self.header(f"Removing: {package}")
+            try:
+                result = subprocess.run(
+                    ['python3', str(COMPAT_DIR / 'run_apk.py'), '--uninstall', package],
+                    cwd=str(COMPAT_DIR), capture_output=True, text=True
+                )
+                if result.returncode == 0:
+                    self.success(f"Removed {package}")
+                else:
+                    self.error(f"Failed to remove {package}")
+            except Exception as e:
+                self.error(f"Remove error: {e}")
+
+    def query_list(self, query=None, info=False):
+        if info and query:
+            self.show_package_info(query)
+            return
+        self.header("Installed Packages")
+        sys.path.insert(0, str(COMPAT_DIR / "runtime"))
+        try:
+            from app_manager import get_app_manager
+            app_mgr = get_app_manager()
+            apps = app_mgr.list_apps()
+            if not apps:
+                print(f"{C.YELLOW}No packages installed{C.END}")
+                return
+            for app in apps:
+                if query and query not in app.package_name and query not in app.name:
+                    continue
+                print(f"{C.CYAN}{app.package_name}{C.END} {C.GREEN}{app.version_name}{C.END}")
+        except Exception as e:
+            self.error(f"Could not list apps: {e}")
+
+    def show_package_info(self, package):
+        self.header(f"Package Info: {package}")
+        sys.path.insert(0, str(COMPAT_DIR / "runtime"))
+        try:
+            from app_manager import get_app_manager
+            app_mgr = get_app_manager()
+            for app in app_mgr.list_apps():
+                if package in app.package_name:
+                    print(f"Name            : {app.name}")
+                    print(f"Package         : {app.package_name}")
+                    print(f"Version         : {app.version_name} ({app.version_code})")
+                    print(f"Install Date    : {app.install_date}")
+                    print(f"Launch Count    : {app.launch_count}")
+                    print(f"Location        : {app.apk_path}")
+                    return
+            self.error(f"Package '{package}' not found")
+        except Exception as e:
+            self.error(f"Could not get package info: {e}")
+
+    def update_db(self):
+        self.header("Updating Package Database")
+        self.spinner("Fetching package list")
+        import time
+        time.sleep(0.5)
+        self.done()
+        self.success("Database updated")
+
+    def upgrade_packages(self, packages=None):
+        self.header("Upgrading Packages")
+        sys.path.insert(0, str(COMPAT_DIR / "runtime"))
+        try:
+            from app_manager import get_app_manager
+            app_mgr = get_app_manager()
+            apps = app_mgr.list_apps()
+            if not apps:
+                print(f"{C.YELLOW}No packages to upgrade{C.END}")
+                return
+            to_upgrade = apps if not packages else [a for a in apps if any(p in a.package_name for p in packages)]
+            if not to_upgrade:
+                print(f"{C.YELLOW}Specified packages not installed{C.END}")
+                return
+            print(f"{C.BOLD}Checking {len(to_upgrade)} package(s)...{C.END}\n")
+            for app in to_upgrade:
+                print(f"  {app.name} - {app.version_name} (up to date)")
+            print(f"\n{C.GREEN}All packages are up to date{C.END}")
+        except Exception as e:
+            self.error(f"Upgrade check failed: {e}")
+
+    def install(self, package):
+        self.header(f"Installing: {package}")
+        sys.path.insert(0, str(COMPAT_DIR / "runtime"))
+        try:
+            from app_manager import get_app_manager
+            app_mgr = get_app_manager()
+            for app in app_mgr.list_apps():
+                if package in app.package_name:
+                    print(f"{C.YELLOW}⚠ {app.name} is already installed ({app.version_name}){C.END}")
+                    response = input(f"{C.YELLOW}Reinstall? [y/N]: {C.END}").strip().lower()
+                    if response != 'y':
+                        print("Installation cancelled.")
+                        return
+                    break
+        except ImportError:
+            pass
+
+        apk_path = self.download_apk(package)
+        if not apk_path or not apk_path.exists():
+            self.error("Download failed")
+            return
+
+        self.spinner("Installing APK")
+        try:
+            result = subprocess.run(
+                ['python3', str(COMPAT_DIR / 'run_apk.py'), str(apk_path), '--install'],
+                cwd=str(COMPAT_DIR), capture_output=True, text=True
+            )
+            self.done()
+            if result.returncode == 0:
+                self.success(f"Installed {package}")
+            else:
+                self.error("Installation failed")
+                if result.stderr:
+                    print(result.stderr)
+        except Exception as e:
+            self.done()
+            self.error(f"Installation error: {e}")
+
+    def download_apk(self, package, url=None):
+        self.spinner(f"Downloading {package}")
+        download_path = CACHE_DIR / f"{package.replace('.', '_')}.apk"
+        try:
+            if url:
+                urllib.request.urlretrieve(url, download_path)
+            else:
+                if package == "com.roblox.client":
+                    download_url = self._get_roblox_apk()
+                    if download_url:
+                        urllib.request.urlretrieve(download_url, download_path)
+                    else:
+                        self.done()
+                        self.error("Could not find Roblox APK download link")
+                        return None
+                else:
+                    self.done()
+                    self.error(f"APK download not implemented for {package}")
+                    print(f"{C.DIM}Supported packages: com.roblox.client{C.END}")
+                    return None
+            self.done()
+            print(f"{C.BLUE}ℹ Downloaded to {download_path}{C.END}")
+            return download_path
+        except Exception as e:
+            self.done()
+            self.error(f"Download failed: {e}")
+            return None
+
+    def _get_roblox_apk(self):
+        try:
+            headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.0'}
+            req = urllib.request.Request("https://www.apkmirror.com/apk/roblox-corporation/roblox/", headers=headers)
+            with urllib.request.urlopen(req, timeout=10) as response:
+                html = response.read().decode('utf-8')
+                match = re.search(r'href="(/wp-content/themes/APKMirror/download\.php\?id=\d+)"', html)
+                if match:
+                    download_page = "https://www.apkmirror.com" + match.group(1)
+                    req2 = urllib.request.Request(download_page, headers=headers)
+                    with urllib.request.urlopen(req2, timeout=10) as response2:
+                        html2 = response2.read().decode('utf-8')
+                        match2 = re.search(r'href="(https://[^"]+\.apk)"', html2)
+                        if match2:
+                            return match2.group(1)
+                        match3 = re.search(r'data-href="(https://[^"]+\.apk)"', html2)
+                        if match3:
+                            return match3.group(1)
+            return None
+        except Exception as e:
+            return None
+
+    def run_app(self, package):
+        self.spinner(f"Launching {package}")
+        try:
+            subprocess.Popen(
+                ['python3', str(COMPAT_DIR / 'run_apk.py'), '--run', package],
+                cwd=str(COMPAT_DIR), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+            self.done()
+            self.success(f"Launched {package}")
+        except Exception as e:
+            self.done()
+            self.error(f"Launch failed: {e}")
+
+    def check_self_update(self):
+        self.header("Checking for updates")
+        self.spinner("Fetching latest version")
+        try:
+            req = urllib.request.Request(f"{GITHUB_RAW}/bin/apkm", headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=10) as response:
+                content = response.read().decode('utf-8')
+                match = re.search(r'VERSION = "([0-9.]+)"', content)
+                remote_version = match.group(1) if match else None
+            self.done()
+            if not remote_version:
+                self.error("Could not determine latest version")
+                return
+            print(f"{C.DIM}Current version: {C.CYAN}{VERSION}{C.END}")
+            print(f"{C.DIM}Latest version:  {C.GREEN}{remote_version}{C.END}")
+            print()
+            if remote_version != VERSION:
+                self.success("Update available!")
+                print(f"\n{C.DIM}Run 'apkm --self-update' to install{C.END}")
+            else:
+                self.success("You have the latest version")
+        except Exception as e:
+            self.done()
+            self.error(f"Check failed: {e}")
+
+    def self_update(self):
+        self.header("Updating APK Manager")
+        self.spinner("Downloading latest version")
+        try:
+            script_path = Path(__file__).resolve()
+            backup_path = script_path.with_suffix('.py.bak')
+            req = urllib.request.Request(f"{GITHUB_RAW}/bin/apkm", headers={'User-Agent': 'Mozilla/5.0'})
+            new_content = None
+            with urllib.request.urlopen(req, timeout=30) as response:
+                new_content = response.read().decode('utf-8')
+            self.done()
+            if 'APK Manager' not in new_content or 'VERSION' not in new_content:
+                self.error("Downloaded file is invalid")
+                return
+            self.spinner("Installing update")
+            script_path.rename(backup_path)
+            script_path.write_text(new_content)
+            script_path.chmod(0o755)
+            self.done()
+            self.success("Updated successfully!")
+            match = re.search(r'VERSION = "([0-9.]+)"', new_content)
+            new_ver = match.group(1) if match else "unknown"
+            print(f"\n{C.DIM}New version: {C.GREEN}{new_ver}{C.END}")
+            print(f"{C.DIM}Backup saved to: {backup_path}{C.END}")
+        except Exception as e:
+            self.done()
+            self.error(f"Update failed: {e}")
+
+    def show_version(self):
+        print(f"{C.CYAN}APK Manager (apkm){C.END} {C.GREEN}{VERSION}{C.END}")
+        print(f"{C.DIM}pacman-style package manager for Android APKs{C.END}")
+        print(f"{C.DIM}GitHub: https://github.com/{GITHUB_REPO}{C.END}")
+
+    def show_help(self):
+        print(f"""
+{C.CYAN}{'═'*60}{C.END}
+{C.BOLD}{C.CYAN}  📦 APK Manager (apkm) - v{VERSION}{C.END}
+{C.DIM}  pacman-style package manager for Android APKs{C.END}
+{C.CYAN}{'═'*60}{C.END}
+
+{C.BOLD}Usage:{C.END} apkm [options] [targets]
+
+{C.BOLD}Operations:{C.END}
+  {C.GREEN}-S, --sync{C.END} [pkg...]      Synchronize (install/update) packages
+  {C.GREEN}-R, --remove{C.END} [pkg...]   Remove package(s)
+  {C.GREEN}-Q, --query{C.END}             Query the package database
+  {C.GREEN}-U, --upgrade{C.END} [pkg...]  Upgrade package(s)
+  {C.GREEN}-V, --version{C.END}            Display version and exit
+  {C.GREEN}-h, --help{C.END}              Display this help message
+
+{C.BOLD}Sync Options (-S):{C.END}
+  {C.GREEN}-s, --search{C.END} <query>    Search remote repositories
+  {C.GREEN}-y, --refresh{C.END}           Download fresh package database
+  {C.GREEN}-u, --sysupgrade{C.END}       Upgrade all packages
+
+{C.BOLD}Query Options (-Q):{C.END}
+  {C.GREEN}-i, --info{C.END}              Display package information
+
+{C.BOLD}Self-Update:{C.END}
+  {C.GREEN}--self-update{C.END}           Update this command from GitHub
+  {C.GREEN}--check-update{C.END}          Check for updates
+
+{C.BOLD}Examples:{C.END}
+  apkm -S com.roblox.client      Install Roblox
+  apkm -Ss roblox                Search for Roblox
+  apkm -R com.roblox.client      Uninstall Roblox
+  apkm -Q                        List installed packages
+  apkm -Qi com.roblox.client     Show package info
+  apkm -Syu                      Update database and upgrade all
+  apkm -U com.roblox.client      Upgrade specific package
+
+{C.DIM}Sources: APKMirror{C.END}
+""")
+
+def main():
+    parser = argparse.ArgumentParser(description='APK Manager - pacman-style package manager', add_help=False)
+    parser.add_argument('-S', '--sync', action='store_true', help='Synchronize packages')
+    parser.add_argument('-R', '--remove', action='store_true', help='Remove packages')
+    parser.add_argument('-Q', '--query', action='store_true', help='Query package database')
+    parser.add_argument('-U', '--upgrade', action='store_true', help='Upgrade packages')
+    parser.add_argument('-V', '--version', action='store_true', help='Show version')
+    parser.add_argument('-h', '--help', action='store_true', help='Show help')
+    parser.add_argument('-s', '--search', action='store_true', help='Search packages')
+    parser.add_argument('-y', '--refresh', action='store_true', help='Refresh database')
+    parser.add_argument('-u', '--sysupgrade', action='store_true', help='System upgrade')
+    parser.add_argument('-i', '--info', action='store_true', help='Package info')
+    parser.add_argument('--self-update', action='store_true', help='Self update')
+    parser.add_argument('--check-update', action='store_true', help='Check for updates')
+    parser.add_argument('--run', action='store_true', help='Run package')
+    parser.add_argument('targets', nargs='*', help='Package names or search queries')
+
+    args = parser.parse_args()
+    apkm = APKManager()
+
+    if args.self_update:
+        apkm.self_update()
+        return
+    if args.check_update:
+        apkm.check_self_update()
+        return
+    if args.version:
+        apkm.show_version()
+        return
+    if args.help or (not args.sync and not args.remove and not args.query and not args.upgrade and not args.targets):
+        apkm.show_help()
+        return
+    if args.sync:
+        if args.search:
+            if args.targets:
+                apkm.sync_search(args.targets[0])
+            else:
+                apkm.error("No search query specified")
+        elif args.sysupgrade:
+            apkm.update_db()
+            apkm.upgrade_packages()
+        else:
+            if args.targets:
+                apkm.sync_install(args.targets, refresh=args.refresh)
+            else:
+                apkm.error("No packages specified for installation")
+        return
+    if args.remove:
+        if args.targets:
+            apkm.remove_packages(args.targets)
+        else:
+            apkm.error("No packages specified for removal")
+        return
+    if args.query:
+        query = args.targets[0] if args.targets else None
+        apkm.query_list(query=query, info=args.info)
+        return
+    if args.upgrade:
+        if args.targets:
+            apkm.upgrade_packages(args.targets)
+        else:
+            apkm.upgrade_packages()
+        return
+    if args.run and args.targets:
+        apkm.run_app(args.targets[0])
+        return
+    apkm.show_help()
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,215 @@
+#!/usr/bin/env python3
+"""
+APK Installer - Terminal Edition with Colors & Effects
+Fancy terminal-based installer with progress bars and animations
+"""
+import sys
+import os
+import subprocess
+import time
+import zipfile
+from pathlib import Path
+
+# ANSI Colors
+class Colors:
+    HEADER = '\033[95m'
+    BLUE = '\033[94m'
+    CYAN = '\033[96m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    RED = '\033[91m'
+    END = '\033[0m'
+    BOLD = '\033[1m'
+    DIM = '\033[2m'
+    UNDERLINE = '\033[4m'
+    BG_GREEN = '\033[42m'
+    BG_BLUE = '\033[44m'
+
+# Get paths
+COMPAT_DIR = Path("/Users/danuta/robloxgen/android_compat")
+if not COMPAT_DIR.exists():
+    COMPAT_DIR = Path.home() / "robloxgen/android_compat"
+
+def clear():
+    """Clear terminal"""
+    os.system('clear')
+
+def print_header(text):
+    """Print fancy header"""
+    width = 60
+    print(f"\n{Colors.CYAN}{'═' * width}{Colors.END}")
+    print(f"{Colors.BOLD}{Colors.CYAN}  📱 {text}{Colors.END}")
+    print(f"{Colors.CYAN}{'═' * width}{Colors.END}\n")
+
+def print_box(text, color=Colors.GREEN):
+    """Print text in a box"""
+    lines = text.split('\n')
+    max_len = max(len(l) for l in lines)
+    width = max_len + 4
+    print(f"\n{color}┌{'─' * (width-2)}┐{Colors.END}")
+    for line in lines:
+        print(f"{color}│{Colors.END} {line:<{max_len}} {color}│{Colors.END}")
+    print(f"{color}└{'─' * (width-2)}┘{Colors.END}\n")
+
+def animate_text(text, delay=0.02):
+    """Type out text with animation"""
+    for char in text:
+        print(char, end='', flush=True)
+        time.sleep(delay)
+    print()
+
+def progress_bar(percent, width=40):
+    """Create a colored progress bar"""
+    filled = int(width * percent / 100)
+    bar = f"{Colors.GREEN}{'█' * filled}{Colors.DIM}{'░' * (width - filled)}{Colors.END}"
+    return f"[{bar}] {Colors.BOLD}{percent}%{Colors.END}"
+
+def spinner(text, duration=2):
+    """Show a spinner animation"""
+    import itertools
+    spinner_chars = itertools.cycle(['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'])
+    start = time.time()
+    while time.time() - start < duration:
+        print(f"\r{Colors.CYAN}{next(spinner_chars)}{Colors.END} {text}", end='', flush=True)
+        time.sleep(0.1)
+    print(f"\r{' ' * (len(text) + 2)}", end='\r')
+
+def run_with_progress(cmd, cwd, status_callback):
+    """Run command with real-time progress updates"""
+    process = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        cwd=str(cwd), text=True, bufsize=1
+    )
+    
+    output_lines = []
+    for line in iter(process.stdout.readline, ''):
+        line = line.rstrip()
+        if line:
+            output_lines.append(line)
+            # Update progress based on output
+            if "Extracting" in line:
+                status_callback(30, "📦 Extracting APK...")
+            elif "Installing" in line or "installed" in line.lower():
+                status_callback(60, "🔧 Installing...")
+            elif "success" in line.lower() or "complete" in line.lower():
+                status_callback(100, "✅ Complete!")
+            elif "error" in line.lower() or "failed" in line.lower():
+                print(f"{Colors.RED}  ✗ {line}{Colors.END}")
+            else:
+                print(f"{Colors.DIM}  → {line}{Colors.END}")
+    
+    process.stdout.close()
+    return process.wait()
+
+def show_install_ui(apk_path):
+    """Show fancy terminal UI for installation"""
+    clear()
+    print_header("APK INSTALLER")
+    
+    apk_name = os.path.basename(apk_path)
+    print(f"{Colors.BOLD}File:{Colors.END} {Colors.CYAN}{apk_name}{Colors.END}")
+    print(f"{Colors.DIM}{apk_path}{Colors.END}\n")
+    
+    # Verify APK
+    print(f"{Colors.YELLOW}🔍 Verifying APK...{Colors.END}")
+    try:
+        with zipfile.ZipFile(apk_path, 'r') as zf:
+            files = zf.namelist()
+            has_dex = any(f.endswith('.dex') for f in files)
+            if has_dex:
+                print(f"{Colors.GREEN}  ✓ Valid APK with DEX files{Colors.END}")
+            else:
+                print(f"{Colors.YELLOW}  ⚠ No DEX files found{Colors.END}")
+            print(f"{Colors.DIM}  → {len(files)} files in archive{Colors.END}")
+    except Exception as e:
+        print(f"{Colors.RED}  ✗ Invalid APK: {e}{Colors.END}")
+        return False
+    
+    # Animation before install
+    spinner("Preparing installation", 1.5)
+    
+    # Installation
+    print(f"\n{Colors.YELLOW}🚀 Installing APK...{Colors.END}\n")
+    
+    cmd = ['python3', str(COMPAT_DIR / 'run_apk.py'), apk_path, '--install']
+    
+    def update_progress(percent, status):
+        print(f"\r  {progress_bar(percent)} {Colors.CYAN}{status}{Colors.END}", end='', flush=True)
+    
+    update_progress(10, "Starting...")
+    result = run_with_progress(cmd, COMPAT_DIR, update_progress)
+    
+    print()  # New line after progress
+    
+    if result == 0:
+        print(f"\n{Colors.GREEN}{Colors.BG_GREEN}{Colors.BOLD}  ✓ INSTALLATION SUCCESSFUL!  {Colors.END}\n")
+        print_box(f"APK installed successfully!\n\nRun it with:\npython3 run_apk.py --run <package_name>")
+        return True
+    else:
+        print(f"\n{Colors.RED}{Colors.BOLD}  ✗ INSTALLATION FAILED  {Colors.END}\n")
+        return False
+
+def get_apk_from_dialog():
+    """Show macOS file picker for APK"""
+    try:
+        result = subprocess.run([
+            'osascript', '-e',
+            'return POSIX path of (choose file with prompt "Select APK to install:" of type {"apk"})'
+        ], capture_output=True, text=True, timeout=30)
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception as e:
+        print(f"{Colors.RED}Error showing file dialog: {e}{Colors.END}")
+    return None
+
+def main():
+    # Get APK path
+    apk_path = None
+    
+    # Check command line
+    if len(sys.argv) > 1:
+        apk_path = sys.argv[1]
+    
+    # Check if file exists
+    if apk_path and not os.path.isfile(apk_path):
+        print(f"{Colors.RED}File not found: {apk_path}{Colors.END}")
+        apk_path = None
+    
+    # If no APK, show file picker
+    if not apk_path:
+        print(f"{Colors.CYAN}Opening file picker...{Colors.END}")
+        apk_path = get_apk_from_dialog()
+    
+    if not apk_path:
+        print(f"{Colors.YELLOW}No APK selected. Exiting.{Colors.END}")
+        sys.exit(1)
+    
+    # Show fancy UI and install
+    success = show_install_ui(apk_path)
+    
+    if success:
+        # Ask if user wants to run the app
+        print(f"\n{Colors.CYAN}Press Enter to close, or type 'run' to launch the app:{Colors.END}", end=' ')
+        response = input().strip().lower()
+        if response == 'run':
+            try:
+                import sys
+                sys.path.insert(0, str(COMPAT_DIR / 'runtime'))
+                from app_manager import get_app_manager
+                app_mgr = get_app_manager()
+                for app in app_mgr.list_apps():
+                    if apk_path in str(app.apk_path):
+                        print(f"\n{Colors.GREEN}🎮 Launching {app.name}...{Colors.END}")
+                        subprocess.Popen([
+                            'python3', str(COMPAT_DIR / 'run_apk.py'),
+                            '--run', app.package_name
+                        ], cwd=str(COMPAT_DIR))
+                        break
+            except Exception as e:
+                print(f"{Colors.RED}Could not launch app: {e}{Colors.END}")
+    
+    print(f"\n{Colors.DIM}Press Enter to exit...{Colors.END}")
+    input()
+
+if __name__ == "__main__":
+    main()

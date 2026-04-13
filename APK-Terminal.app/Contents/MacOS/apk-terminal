@@ -1,0 +1,35 @@
+#!/bin/bash
+# Terminal launcher for APK files
+APK_FILE="$1"
+
+if [ -z "$APK_FILE" ] || [ ! -f "$APK_FILE" ]; then
+    # Try Finder selection
+    APK_FILE=$(osascript <<'OSA' 2>/dev/null
+        tell application "Finder"
+            try
+                set theSelection to selection
+                if (count theSelection) > 0 then
+                    return POSIX path of (item 1 of theSelection as alias)
+                end if
+            on error
+            end try
+        end tell
+        return ""
+OSA
+    )
+fi
+
+COMPAT_DIR="/Users/danuta/robloxgen/android_compat"
+APK_CMD="$COMPAT_DIR/bin/apk"
+
+osascript <<OSA
+tell application "Terminal"
+    activate
+    if "$APK_FILE" != "" then
+        do script "\"$APK_CMD\" install \"$APK_FILE\""
+    else
+        do script "\"$APK_CMD\" help"
+    end if
+    set custom title of front window to "📱 APK Installer"
+end tell
+OSA

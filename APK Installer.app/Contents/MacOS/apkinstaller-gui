@@ -1,0 +1,42 @@
+#!/bin/bash
+# GUI APK Installer launcher
+
+# Get the APK file path
+APK_FILE="$1"
+
+# Get the directory where this script is located
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+APP_BUNDLE="$(dirname "$SCRIPT_DIR")"
+
+# Find android_compat directory
+COMPAT_DIR="$(dirname "$APP_BUNDLE")"
+
+# If we're in the app bundle, go up two levels
+if [[ "$COMPAT_DIR" == *"APK Installer.app"* ]]; then
+    COMPAT_DIR="/Users/danuta/robloxgen/android_compat"
+fi
+
+# Fallback locations
+if [ ! -d "$COMPAT_DIR" ]; then
+    COMPAT_DIR="$HOME/robloxgen/android_compat"
+fi
+
+if [ ! -d "$COMPAT_DIR" ]; then
+    COMPAT_DIR="/Users/danuta/robloxgen/android_compat"
+fi
+
+# Run the GUI installer
+if [ -f "$COMPAT_DIR/apk_install_gui.py" ]; then
+    cd "$COMPAT_DIR"
+    python3 "$COMPAT_DIR/apk_install_gui.py" "$APK_FILE" &
+else
+    # Fallback to console installer
+    osascript <<EOF
+tell application "Terminal"
+    activate
+    do script "cd \"$COMPAT_DIR\" && python3 run_apk.py \"$APK_FILE\" --install && echo \"Press Enter to close...\" && read"
+end tell
+EOF
+fi
+
+exit 0
