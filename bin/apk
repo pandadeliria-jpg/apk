@@ -73,45 +73,89 @@ class APKManager:
     def done(self):
         print(f" {C.GREEN}Done{C.END}")
     
-    def search_apkmirror(self, query: str) -> List[Dict]:
-        """Search APKMirror for apps"""
+    def search_apkmirror(self, query: str, proxy: str = None) -> List[Dict]:
+        """Search APKMirror for apps with proxy support"""
         self.spinner(f"Searching for '{query}' on APKMirror")
+        
+        # Get proxy if not provided
+        if not proxy:
+            proxy = self._get_proxy()
         
         try:
             search_url = f"https://www.apkmirror.com/?s={urllib.parse.quote(query)}&post_type=app_release"
             
-            mock_results = [
-                {
-                    "name": "Roblox",
-                    "package": "com.roblox.client",
-                    "developer": "Roblox Corporation",
-                    "version": "2.650.742",
-                    "source": "apkmirror"
-                },
-                {
-                    "name": "Minecraft",
-                    "package": "com.mojang.minecraftpe",
-                    "developer": "Mojang",
-                    "version": "1.20.0",
-                    "source": "apkmirror"
-                }
-            ]
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'DNT': '1',
+                'Connection': 'keep-alive',
+            }
             
-            results = [r for r in mock_results if query.lower() in r["name"].lower() or query.lower() in r["package"].lower()]
+            # Build opener with proxy if using SOCKS5
+            if proxy and proxy.startswith('socks5://'):
+                try:
+                    import socks
+                    import socket
+                    proxy_host = proxy.replace('socks5://', '').split(':')[0]
+                    proxy_port = int(proxy.replace('socks5://', '').split(':')[1])
+                    socks.set_default_proxy(socks.SOCKS5, proxy_host, proxy_port)
+                    socket.socket = socks.socksocket
+                except ImportError:
+                    # socks library not available, try without
+                    pass
+            
+            req = urllib.request.Request(search_url, headers=headers)
+            
+            with urllib.request.urlopen(req, timeout=15) as response:
+                html = response.read().decode('utf-8')
+            
+            # Parse search results from HTML
+            results = []
+            import re
+            
+            # Find app entries in search results
+            app_pattern = r'<div[^>]*class="[^"]*appRow[^"]*"[^>]*>.*?<h5[^>]*>.*?<a[^>]*href="([^"]+)"[^>]*>([^<]+)</a>.*?</h5>.*?<div[^>]*class="[^"]*developer[^"]*"[^>]*>([^<]+)</div>.*?</div>'
+            matches = re.findall(app_pattern, html, re.DOTALL | re.IGNORECASE)
+            
+            for url_path, name, developer in matches[:10]:  # Limit to 10 results
+                # Extract package name from URL
+                pkg_match = re.search(r'/apk/([^/]+)/([^/]+)/', url_path)
+                if pkg_match:
+                    package = f"com.{pkg_match.group(1)}.{pkg_match.group(2)}"
+                else:
+                    package = name.lower().replace(' ', '.')
+                
+                results.append({
+                    "name": name.strip(),
+                    "package": package,
+                    "developer": developer.strip(),
+                    "version": "latest",
+                    "source": "apkmirror",
+                    "url": f"https://www.apkmirror.com{url_path}"
+                })
             
             self.done()
             return results
             
+        except urllib.error.HTTPError as e:
+            self.done()
+            if e.code == 429:
+                self.error("Rate limited by APKMirror (use --proxy tor)")
+            else:
+                self.error(f"HTTP {e.code}: {e.reason}")
+            return []
         except Exception as e:
             self.done()
             self.error(f"Search failed: {e}")
             return []
     
-    def search(self, query: str):
-        """Search for apps"""
+    def search(self, query: str, proxy: str = None):
+        """Search for apps with optional proxy"""
         self.header(f"Searching: {query}")
         
-        results = self.search_apkmirror(query)
+        results = self.search_apkmirror(query, proxy=proxy)
         
         if not results:
             print(f"{C.YELLOW}No packages found matching '{query}'{C.END}")
@@ -1263,7 +1307,7 @@ def main():
         if not args:
             apk.error("Usage: apk search <query>")
             return
-        apk.search(args[0])
+        apk.search(args[0], proxy=proxy)
         return
     
     if command == 'update':
