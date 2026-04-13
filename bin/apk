@@ -310,12 +310,131 @@ class APKManager:
         print(f"\n{C.DIM}Package '{package}' has been completely removed{C.END}")
     
     def install_local(self, apk_path: Path):
-        """Install a local APK file (apt install ./file.apk style)"""
-        self.header(f"Installing local APK: {apk_path.name}")
+        """Install a local APK or APK bundle file (apt install ./file.apk style)"""
+        self.header(f"Installing: {apk_path.name}")
         
         if not apk_path.exists():
             self.error(f"File not found: {apk_path}")
             return
+        
+        # Check if it's a bundle format (.apkm, .xapk, .apks, .zip)
+        bundle_exts = ['.apkm', '.xapk', '.apks', '.zip']
+        is_bundle = any(str(apk_path).lower().endswith(ext) for ext in bundle_exts)
+        
+        if is_bundle:
+            self._install_bundle(apk_path)
+        else:
+            self._install_single_apk(apk_path)
+    
+    def _install_bundle(self, bundle_path: Path):
+        """Extract and install APK bundle (.apkm, .xapk, .apks, .zip)"""
+        import shutil
+        import zipfile
+        
+        package_name = bundle_path.stem.replace('_', '.')
+        app_dir = APK_CELLAR / package_name
+        app_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Create extraction directory
+        extract_dir = app_dir / "extracted"
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        
+        self.spinner(f"Extracting {bundle_path.suffix} bundle")
+        
+        try:
+            # Extract the bundle
+            with zipfile.ZipFile(bundle_path, 'r') as zip_ref:
+                zip_ref.extractall(extract_dir)
+            
+            self.done()
+            self.success(f"Extracted to {extract_dir}")
+            
+            # Find all APK files in extracted directory
+            apk_files = list(extract_dir.rglob("*.apk"))
+            
+            if not apk_files:
+                self.error("No APK files found in bundle")
+                # Cleanup
+                shutil.rmtree(extract_dir, ignore_errors=True)
+                return
+            
+            # Sort: base APK first (usually has 'base' in name or is the largest)
+            base_apk = None
+            split_apks = []
+            
+            for apk in apk_files:
+                name_lower = apk.name.lower()
+                if 'base' in name_lower or 'main' in name_lower:
+                    base_apk = apk
+                else:
+                    split_apks.append(apk)
+            
+            # If no base found, use the largest APK
+            if not base_apk and apk_files:
+                base_apk = max(apk_files, key=lambda p: p.stat().st_size)
+                split_apks = [a for a in apk_files if a != base_apk]
+            
+            self.info(f"Found {len(apk_files)} APK(s): 1 base + {len(split_apks)} split(s)")
+            
+            # Copy base APK to root of app_dir
+            base_dest = app_dir / f"{package_name}.apk"
+            shutil.copy(base_apk, base_dest)
+            self.success(f"Base APK: {base_apk.name}")
+            
+            # Copy split APKs to splits subdirectory
+            if split_apks:
+                splits_dir = app_dir / "splits"
+                splits_dir.mkdir(exist_ok=True)
+                for split in split_apks:
+                    shutil.copy(split, splits_dir / split.name)
+                    self.info(f"Split: {split.name}")
+            
+            # Cleanup extraction directory
+            shutil.rmtree(extract_dir, ignore_errors=True)
+            
+            # Install via runtime if available
+            if COMPAT_DIR.exists():
+                self.spinner("Installing bundle")
+                
+                try:
+                    # Install base APK
+                    result = subprocess.run(
+                        ['python3', str(COMPAT_DIR / 'run_apk.py'), str(base_dest), '--install'],
+                        cwd=str(COMPAT_DIR),
+                        capture_output=True,
+                        text=True
+                    )
+                    
+                    self.done()
+                    
+                    if result.returncode == 0:
+                        self.success(f"Installed {package_name}")
+                        if split_apks:
+                            print(f"\n{C.DIM}Note: {len(split_apks)} split APK(s) saved but not auto-installed{C.END}")
+                        print(f"\n{C.GREEN}Run with: apk run {package_name}{C.END}")
+                    else:
+                        self.error("Installation failed")
+                        if result.stderr:
+                            print(result.stderr)
+                            
+                except Exception as e:
+                    self.done()
+                    self.error(f"Installation error: {e}")
+            else:
+                self.success(f"Saved bundle to Cellar")
+                self.info("Install runtime not available. Bundle extracted to Cellar.")
+                
+        except zipfile.BadZipFile:
+            self.done()
+            self.error(f"Invalid bundle file: {bundle_path.name}")
+            self.info("File may be corrupted or not a valid ZIP archive")
+        except Exception as e:
+            self.done()
+            self.error(f"Bundle extraction failed: {e}")
+    
+    def _install_single_apk(self, apk_path: Path):
+        """Install a single APK file"""
+        import shutil
         
         # Try to extract package name from APK filename or metadata
         package_name = apk_path.stem.replace('_', '.')
@@ -326,7 +445,6 @@ class APKManager:
         
         # Copy APK to Cellar
         dest_path = app_dir / f"{package_name}.apk"
-        import shutil
         shutil.copy(apk_path, dest_path)
         
         self.success(f"Copied {apk_path.name} to Cellar")
@@ -604,7 +722,7 @@ class APKManager:
 {C.BOLD}Usage:{C.END} apk <command> [options] [targets]
 
 {C.BOLD}Commands:{C.END}
-  {C.GREEN}install{C.END} <pkg|file.apk>  Install package from repo or local file
+  {C.GREEN}install{C.END} <pkg|file>     Install package (.apk, .apkm, .xapk, .apks, .zip)
   {C.GREEN}remove{C.END} <package>        Remove package
   {C.GREEN}purge{C.END} <package>          Remove package and config files
   {C.GREEN}search{C.END} <query>          Search for packages
@@ -630,6 +748,7 @@ class APKManager:
 {C.BOLD}Examples:{C.END}
   apk install com.roblox.client       Install from repository
   apk install ./app.apk               Install local APK file
+  apk install ./bundle.apkm           Install APKMirror bundle (.apkm, .xapk)
   apk search roblox                   Search for packages
   apk remove com.roblox.client        Uninstall package
   apk update && apk upgrade           Update and upgrade
