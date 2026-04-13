@@ -273,17 +273,37 @@ class APKManager:
         """Get Tor SOCKS5 proxy URL"""
         return 'socks5://127.0.0.1:9050'
     
-    def _check_apkmirror_downloader(self) -> bool:
-        """Check if apkmirror-downloader is installed"""
+    def _get_apkmirror_downloader_cmd(self) -> list:
+        """Get the command to run apkmirror-downloader (direct or via npx)"""
+        # First check if it's available directly
         try:
             result = subprocess.run(
                 ['which', 'apkmirror-downloader'],
                 capture_output=True,
-                text=True
+                text=True, timeout=5
             )
-            return result.returncode == 0
-        except Exception:
-            return False
+            if result.returncode == 0 and result.stdout.strip():
+                return ['apkmirror-downloader']
+        except:
+            pass
+        
+        # Check if npx is available
+        try:
+            result = subprocess.run(
+                ['which', 'npx'],
+                capture_output=True,
+                text=True, timeout=5
+            )
+            if result.returncode == 0:
+                return ['npx', '-y', 'apkmirror-downloader']
+        except:
+            pass
+        
+        return None
+    
+    def _check_apkmirror_downloader(self) -> bool:
+        """Check if apkmirror-downloader is installed"""
+        return self._get_apkmirror_downloader_cmd() is not None
     
     def _install_apkmirror_downloader(self) -> bool:
         """Install apkmirror-downloader via npm"""
@@ -328,6 +348,11 @@ class APKManager:
                 self.error("Could not install apkmirror-downloader")
                 self.info("Install manually: npm install -g apkmirror-downloader")
                 return None
+            # Verify installation worked
+            if not self._check_apkmirror_downloader():
+                self.error("apkmirror-downloader installed but not found in PATH")
+                self.info("Try: npm install -g apkmirror-downloader")
+                return None
             self.spinner(f"Downloading {package}")
 
         # Extract app name from package (e.g., com.roblox.client -> roblox)
@@ -338,8 +363,15 @@ class APKManager:
         download_dir.mkdir(parents=True, exist_ok=True)
         
         try:
-            # Build apkmirror-downloader command with proxy
-            cmd = ['apkmirror-downloader', app_name, '-d', str(download_dir)]
+            # Get apkmirror-downloader command (direct or via npx)
+            base_cmd = self._get_apkmirror_downloader_cmd()
+            if not base_cmd:
+                self.done()
+                self.error("apkmirror-downloader not found. Install: npm install -g apkmirror-downloader")
+                return None
+            
+            # Build full command
+            cmd = base_cmd + [app_name, '-d', str(download_dir)]
             
             # Set proxy environment variable if available
             env = os.environ.copy()
