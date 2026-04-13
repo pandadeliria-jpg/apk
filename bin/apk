@@ -29,8 +29,16 @@ COMPAT_DIR = Path("/Users/danuta/robloxgen/android_compat")
 if not COMPAT_DIR.exists():
     COMPAT_DIR = Path.home() / "robloxgen/android_compat"
 
-CACHE_DIR = Path.home() / ".cache/apk"
-CACHE_DIR.mkdir(parents=True, exist_ok=True)
+# Homebrew-style paths
+HOME = Path.home()
+APK_PREFIX = HOME / ".apk"
+APK_BIN = APK_PREFIX / "bin"
+APK_CELLAR = APK_PREFIX / "Cellar"
+APK_CACHE = APK_PREFIX / "cache"
+APK_CELLAR.mkdir(parents=True, exist_ok=True)
+APK_CACHE.mkdir(parents=True, exist_ok=True)
+
+CACHE_DIR = APK_CACHE  # Legacy compatibility
 
 # Version and update config
 VERSION = "1.1.0"
