@@ -1009,9 +1009,58 @@ class APKManager:
         self.success("Cleanup complete!")
         print(f"\n{C.DIM}Cache directory: {APK_CACHE}{C.END}")
 
+    def _interactive_menu(self, title: str, options: list, current_idx: int = 0) -> int:
+        """Show interactive menu with arrow key navigation, return selected index"""
+        import sys
+        import tty
+        import termios
+        
+        def clear_screen():
+            print('\033[2J\033[H', end='')
+        
+        def render():
+            clear_screen()
+            print(f"{C.CYAN}{'═'*60}{C.END}")
+            print(f"{C.BOLD}{C.CYAN}  {title}{C.END}")
+            print(f"{C.CYAN}{'═'*60}{C.END}\n")
+            
+            for i, (label, desc) in enumerate(options):
+                if i == current_idx:
+                    print(f"  {C.GREEN}▶ {label}{C.END} {C.DIM}{desc}{C.END}")
+                else:
+                    print(f"    {label} {C.DIM}{desc}{C.END}")
+            
+            print(f"\n{C.DIM}↑/↓ Navigate  ⏎ Select  q Quit{C.END}")
+            sys.stdout.flush()
+        
+        # Save terminal settings
+        old_settings = termios.tcgetattr(sys.stdin)
+        
+        try:
+            tty.setcbreak(sys.stdin.fileno())
+            
+            while True:
+                render()
+                
+                # Read key
+                key = sys.stdin.read(1)
+                
+                if key == '\x1b':  # Escape sequence (arrow keys)
+                    seq = sys.stdin.read(2)
+                    if seq == '[A':  # Up
+                        current_idx = (current_idx - 1) % len(options)
+                    elif seq == '[B':  # Down
+                        current_idx = (current_idx + 1) % len(options)
+                elif key in ('\n', '\r', ' '):  # Enter or Space
+                    return current_idx
+                elif key in ('q', 'Q', '\x03'):  # q or Ctrl+C
+                    return -1
+                    
+        finally:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+    
     def config(self, args: list):
-        """Show/edit configuration including proxy settings"""
-        self.header("apk config")
+        """Interactive configuration with arrow key navigation"""
         
         config_file = APK_PREFIX / "config.json"
         config = {}
@@ -1023,7 +1072,7 @@ class APKManager:
             except Exception:
                 pass
         
-        # Handle --edit flag
+        # Check for command-line flags first
         if args and args[0] in ('--edit', '-e'):
             editor = os.environ.get('EDITOR', 'nano')
             if not config_file.exists():
@@ -1031,20 +1080,100 @@ class APKManager:
             subprocess.run([editor, str(config_file)])
             return
         
-        # Handle --set-proxy
-        if args and args[0] == '--set-proxy':
-            if len(args) < 2:
-                print(f"{C.RED}Usage: apk config --set-proxy <proxy-url|warp|tor|none>{C.END}")
-                return
-            proxy_value = args[1]
-            if proxy_value.lower() == 'none':
+        # Interactive TUI mode
+        self.header("apk config")
+        print(f"{C.DIM}Loading interactive config...{C.END}\n")
+        
+        # Build menu options based on current state
+        current_proxy = config.get('proxy', 'none')
+        warp_connected = self._is_warp_running()
+        tor_running = self._is_tor_running()
+        
+        while True:
+            options = []
+            
+            # Proxy options
+            options.append(("🌐 Proxy Settings", f"Current: {current_proxy}"))
+            
+            # Quick toggles if available
+            if warp_connected:
+                options.append(("🔗 Use WARP", "System VPN detected"))
+            if tor_running:
+                options.append(("🧅 Use Tor", "SOCKS5 proxy detected"))
+            
+            options.append(("❌ No Proxy", "Direct connection"))
+            options.append(("⚙️  Advanced", "Edit config.json"))
+            options.append(("🔙 Done", "Save and exit"))
+            
+            # Show menu
+            idx = self._interactive_menu("📦 APK Manager Configuration", options)
+            
+            if idx == -1 or options[idx][0] == "🔙 Done":
+                break
+            elif options[idx][0] == "⚙️  Advanced":
+                editor = os.environ.get('EDITOR', 'nano')
+                config_file.write_text(json.dumps(config, indent=2))
+                subprocess.run([editor, str(config_file)])
+                # Reload config
+                if config_file.exists():
+                    try:
+                        config = json.loads(config_file.read_text())
+                        current_proxy = config.get('proxy', 'none')
+                    except:
+                        pass
+            elif options[idx][0] == "❌ No Proxy":
                 config.pop('proxy', None)
-                print(f"{C.GREEN}Proxy removed from config{C.END}")
-            else:
-                config['proxy'] = proxy_value
-                print(f"{C.GREEN}Proxy set to: {C.CYAN}{proxy_value}{C.END}")
-            config_file.write_text(json.dumps(config, indent=2))
-            return
+                current_proxy = 'none'
+                print(f"\n{C.GREEN}✓ Proxy disabled{C.END}")
+                import time
+                time.sleep(0.5)
+            elif options[idx][0] == "🔗 Use WARP":
+                config['proxy'] = 'warp'
+                current_proxy = 'warp'
+                print(f"\n{C.GREEN}✓ WARP VPN enabled{C.END}")
+                import time
+                time.sleep(0.5)
+            elif options[idx][0] == "🧅 Use Tor":
+                config['proxy'] = 'tor'
+                current_proxy = 'tor'
+                print(f"\n{C.GREEN}✓ Tor SOCKS5 enabled{C.END}")
+                import time
+                time.sleep(0.5)
+            elif options[idx][0] == "🌐 Proxy Settings":
+                # Sub-menu for proxy
+                proxy_options = [
+                    ("Tor (SOCKS5)", "Privacy-focused, slower"),
+                    ("WARP (VPN)", "Cloudflare VPN, faster"),
+                    ("HTTP Proxy", "Custom proxy URL"),
+                    ("None", "Direct connection"),
+                ]
+                
+                proxy_idx = self._interactive_menu("Select Proxy Type", proxy_options)
+                
+                if proxy_idx == 0:  # Tor
+                    config['proxy'] = 'tor'
+                    current_proxy = 'tor'
+                elif proxy_idx == 1:  # WARP
+                    config['proxy'] = 'warp'
+                    current_proxy = 'warp'
+                elif proxy_idx == 2:  # HTTP
+                    print(f"\n{C.YELLOW}Enter proxy URL (e.g., http://proxy:8080):{C.END} ", end='')
+                    import sys
+                    proxy_url = input().strip()
+                    if proxy_url:
+                        config['proxy'] = proxy_url
+                        current_proxy = proxy_url
+                elif proxy_idx == 3:  # None
+                    config.pop('proxy', None)
+                    current_proxy = 'none'
+        
+        # Save config
+        config_file.write_text(json.dumps(config, indent=2))
+        
+        # Clear screen and show final status
+        print('\033[2J\033[H', end='')
+        self.header("apk config")
+        print(f"{C.GREEN}Configuration saved!{C.END}\n")
         
         # Show current config
         print(f"{C.BOLD}Configuration:{C.END}\n")
