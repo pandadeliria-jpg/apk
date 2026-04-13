@@ -868,6 +868,132 @@ class APKManager:
             # Silently fail - don't annoy user if offline
             pass
 
+    def doctor(self):
+        """Check system health and configuration"""
+        self.header("apk doctor - System Health Check")
+        
+        checks_passed = 0
+        checks_total = 0
+        
+        # Check 1: Python version
+        checks_total += 1
+        self.spinner("Checking Python version")
+        py_version = sys.version_info
+        if py_version.major >= 3 and py_version.minor >= 8:
+            self.done()
+            print(f"  {C.GREEN}✓{C.END} Python {py_version.major}.{py_version.minor}.{py_version.micro}")
+            checks_passed += 1
+        else:
+            self.done()
+            print(f"  {C.RED}✗{C.END} Python {py_version.major}.{py_version.minor}.{py_version.micro} (need 3.8+)")
+        
+        # Check 2: Node.js and apkmirror-downloader
+        checks_total += 1
+        self.spinner("Checking apkmirror-downloader")
+        if self._check_apkmirror_downloader():
+            self.done()
+            print(f"  {C.GREEN}✓{C.END} apkmirror-downloader installed")
+            checks_passed += 1
+        else:
+            self.done()
+            print(f"  {C.YELLOW}⚠{C.END} apkmirror-downloader not installed (will auto-install)")
+        
+        # Check 3: WARP status
+        checks_total += 1
+        self.spinner("Checking WARP VPN")
+        if self._is_warp_running():
+            self.done()
+            print(f"  {C.GREEN}✓{C.END} WARP VPN active")
+            checks_passed += 1
+        else:
+            self.done()
+            print(f"  {C.DIM}○{C.END} WARP VPN not active (optional)")
+        
+        # Check 4: Tor status
+        checks_total += 1
+        self.spinner("Checking Tor")
+        if self._is_tor_running():
+            self.done()
+            print(f"  {C.GREEN}✓{C.END} Tor daemon running")
+            checks_passed += 1
+        else:
+            self.done()
+            print(f"  {C.DIM}○{C.END} Tor not running (optional)")
+        
+        # Check 5: Directories
+        checks_total += 1
+        self.spinner("Checking directory structure")
+        dirs_ok = all([
+            APK_PREFIX.exists(),
+            APK_CELLAR.exists(),
+            APK_CACHE.exists(),
+            APK_BIN.exists()
+        ])
+        if dirs_ok:
+            self.done()
+            print(f"  {C.GREEN}✓{C.END} Homebrew-style directories OK")
+            checks_passed += 1
+        else:
+            self.done()
+            print(f"  {C.RED}✗{C.END} Directory structure incomplete")
+        
+        # Check 6: Runtime compatibility
+        checks_total += 1
+        self.spinner("Checking Android runtime")
+        runtime_ok = (COMPAT_DIR / "runtime" / "app_manager.py").exists()
+        if runtime_ok:
+            self.done()
+            print(f"  {C.GREEN}✓{C.END} Android runtime available")
+            checks_passed += 1
+        else:
+            self.done()
+            print(f"  {C.YELLOW}⚠{C.END} Android runtime not found at {COMPAT_DIR}")
+        
+        # Summary
+        print(f"\n{C.BOLD}Results:{C.END} {checks_passed}/{checks_total} checks passed")
+        if checks_passed == checks_total:
+            print(f"{C.GREEN}Your system is ready!{C.END}")
+        elif checks_passed >= checks_total - 1:
+            print(f"{C.YELLOW}System is functional with minor issues{C.END}")
+        else:
+            print(f"{C.RED}Some issues detected - see above{C.END}")
+        
+        print(f"\n{C.DIM}Run 'apk cleanup' to clear cache{C.END}")
+    
+    def cleanup(self):
+        """Clean cache and temporary files"""
+        self.header("apk cleanup")
+        
+        import shutil
+        
+        # Clean download cache
+        download_dir = APK_CACHE / "downloads"
+        if download_dir.exists():
+            self.spinner("Cleaning download cache")
+            shutil.rmtree(download_dir)
+            self.done()
+            print(f"  {C.GREEN}✓{C.END} Removed {download_dir}")
+        
+        # Clean old backups
+        backup_files = list(Path(__file__).parent.glob("*.bak"))
+        if backup_files:
+            self.spinner(f"Removing {len(backup_files)} backup(s)")
+            for f in backup_files:
+                f.unlink()
+            self.done()
+            print(f"  {C.GREEN}✓{C.END} Removed backup files")
+        
+        # Clean auto-update check file
+        last_check = APK_CACHE / '.last_update_check'
+        if last_check.exists():
+            self.spinner("Resetting update check")
+            last_check.unlink()
+            self.done()
+            print(f"  {C.GREEN}✓{C.END} Reset update check timer")
+        
+        self.success("Cleanup complete!")
+        print(f"\n{C.DIM}Cache directory: {APK_CACHE}{C.END}")
+
     def config(self, args: list):
         """Show/edit configuration including proxy settings"""
         self.header("apk config")
