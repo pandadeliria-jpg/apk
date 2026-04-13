@@ -85,10 +85,10 @@ class APKManager:
             search_url = f"https://www.apkmirror.com/?s={urllib.parse.quote(query)}&post_type=app_release"
             
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.5',
-                'Accept-Encoding': 'gzip, deflate, br',
+                'Accept-Encoding': 'identity',  # No compression
                 'DNT': '1',
                 'Connection': 'keep-alive',
             }
@@ -109,15 +109,7 @@ class APKManager:
             req = urllib.request.Request(search_url, headers=headers)
             
             with urllib.request.urlopen(req, timeout=15) as response:
-                data = response.read()
-                
-                # Handle gzip/deflate compression
-                import gzip
-                try:
-                    html = gzip.decompress(data).decode('utf-8')
-                except:
-                    # Not gzip, try plain
-                    html = data.decode('utf-8')
+                html = response.read().decode('utf-8', errors='replace')
             
             # Parse search results from HTML
             results = []
