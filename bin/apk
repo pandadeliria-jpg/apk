@@ -323,7 +323,7 @@ class APKManager:
             return False
 
     def download_apk_fdroid(self, package: str) -> Optional[Path]:
-        """Download APK from F-Droid (direct download, no proxy needed)"""
+        """Download APK from F-Droid using API v1 (direct download, no proxy needed)"""
         self.spinner(f"Downloading {package} from F-Droid")
         
         # Create download directory
@@ -332,32 +332,26 @@ class APKManager:
         
         try:
             import urllib.request
-            import re
+            import json
             
             headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'}
             
-            # Get the package page to find download link
-            package_url = f"https://f-droid.org/packages/{package}/"
+            # Use F-Droid API v1 to get package info
+            api_url = f"https://f-droid.org/api/v1/packages/{package}"
             
-            req = urllib.request.Request(package_url, headers=headers)
+            req = urllib.request.Request(api_url, headers=headers)
             with urllib.request.urlopen(req, timeout=15) as response:
-                html = response.read().decode('utf-8')
+                data = json.loads(response.read().decode('utf-8'))
             
-            # Find download link - F-Droid format: https://f-droid.org/repo/package_version.apk
-            # or look for the .apk link in the HTML
-            apk_match = re.search(r'href="(https://f-droid\.org/repo/[^"]+\.apk)"', html)
+            # Get suggested version code from package info
+            version_code = data.get('suggestedVersionCode')
+            if not version_code:
+                self.done()
+                self.error(f"No version info found for {package}")
+                return None
             
-            if not apk_match:
-                # Try alternative pattern
-                apk_match = re.search(r'href="(/repo/[^"]+\.apk)"', html)
-                if apk_match:
-                    apk_url = "https://f-droid.org" + apk_match.group(1)
-                else:
-                    self.done()
-                    self.error(f"Could not find download link for {package}")
-                    return None
-            else:
-                apk_url = apk_match.group(1)
+            # Build download URL
+            apk_url = f"https://f-droid.org/repo/{package}_{version_code}.apk"
             
             self.done()
             self.spinner(f"Downloading APK")
