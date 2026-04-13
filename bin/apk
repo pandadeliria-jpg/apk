@@ -73,79 +73,116 @@ class APKManager:
     def done(self):
         print(f" {C.GREEN}Done{C.END}")
     
+    def _check_playwright(self) -> bool:
+        """Check if Playwright is installed"""
+        try:
+            from playwright.sync_api import sync_playwright
+            return True
+        except ImportError:
+            return False
+    
+    def _install_playwright(self) -> bool:
+        """Install Playwright"""
+        try:
+            self.spinner("Installing Playwright")
+            subprocess.run([sys.executable, '-m', 'pip', 'install', 'playwright'], 
+                        capture_output=True, timeout=60)
+            subprocess.run([sys.executable, '-m', 'playwright', 'install', 'chromium'],
+                        capture_output=True, timeout=120)
+            self.done()
+            return True
+        except Exception as e:
+            self.done()
+            self.error(f"Failed to install Playwright: {e}")
+            return False
+
     def search_apkmirror(self, query: str, proxy: str = None) -> List[Dict]:
-        """Search APKMirror for apps with proxy support"""
+        """Search APKMirror using Playwright browser automation"""
         self.spinner(f"Searching for '{query}' on APKMirror")
+        
+        # Check/install Playwright
+        if not self._check_playwright():
+            self.done()
+            self.info("Installing Playwright browser...")
+            if not self._install_playwright():
+                self.error("Could not install Playwright")
+                return []
+            self.spinner(f"Searching for '{query}' on APKMirror")
         
         # Get proxy if not provided
         if not proxy:
             proxy = self._get_proxy()
         
         try:
-            search_url = f"https://www.apkmirror.com/?s={urllib.parse.quote(query)}&post_type=app_release"
-            
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-                'Accept-Encoding': 'identity',  # No compression
-                'DNT': '1',
-                'Connection': 'keep-alive',
-            }
-            
-            # Build opener with proxy if using SOCKS5
-            if proxy and proxy.startswith('socks5://'):
-                try:
-                    import socks
-                    import socket
-                    proxy_host = proxy.replace('socks5://', '').split(':')[0]
-                    proxy_port = int(proxy.replace('socks5://', '').split(':')[1])
-                    socks.set_default_proxy(socks.SOCKS5, proxy_host, proxy_port)
-                    socket.socket = socks.socksocket
-                except ImportError:
-                    # socks library not available, try without
-                    pass
-            
-            req = urllib.request.Request(search_url, headers=headers)
-            
-            with urllib.request.urlopen(req, timeout=15) as response:
-                html = response.read().decode('utf-8', errors='replace')
-            
-            # Parse search results from HTML
-            results = []
+            from playwright.sync_api import sync_playwright
             import re
             
-            # Find app entries in search results
-            app_pattern = r'<div[^>]*class="[^"]*appRow[^"]*"[^>]*>.*?<h5[^>]*>.*?<a[^>]*href="([^"]+)"[^>]*>([^<]+)</a>.*?</h5>.*?<div[^>]*class="[^"]*developer[^"]*"[^>]*>([^<]+)</div>.*?</div>'
-            matches = re.findall(app_pattern, html, re.DOTALL | re.IGNORECASE)
+            search_url = f"https://www.apkmirror.com/?s={urllib.parse.quote(query)}&post_type=app_release"
             
-            for url_path, name, developer in matches[:10]:  # Limit to 10 results
-                # Extract package name from URL
-                pkg_match = re.search(r'/apk/([^/]+)/([^/]+)/', url_path)
-                if pkg_match:
-                    package = f"com.{pkg_match.group(1)}.{pkg_match.group(2)}"
-                else:
-                    package = name.lower().replace(' ', '.')
+            with sync_playwright() as p:
+                # Launch browser with proxy if specified
+                browser_args = {
+                    'headless': True,
+                }
                 
-                results.append({
-                    "name": name.strip(),
-                    "package": package,
-                    "developer": developer.strip(),
-                    "version": "latest",
-                    "source": "apkmirror",
-                    "url": f"https://www.apkmirror.com{url_path}"
-                })
+                if proxy and proxy.startswith('socks5://'):
+                    # Playwright doesn't support SOCKS5 directly, skip for now
+                    pass
+                elif proxy and (proxy.startswith('http://') or proxy.startswith('https://')):
+                    browser_args['proxy'] = {'server': proxy}
+                
+                browser = p.chromium.launch(**browser_args)
+                context = browser.new_context(
+                    user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                )
+                page = context.new_page()
+                
+                # Navigate to search page
+                page.goto(search_url, wait_until='networkidle', timeout=30000)
+                
+                # Wait for results to load
+                page.wait_for_selector('.appRow', timeout=10000)
+                
+                # Extract results
+                results = []
+                app_rows = page.query_selector_all('.appRow')
+                
+                for row in app_rows[:10]:
+                    try:
+                        # Get app name
+                        name_el = row.query_selector('h5 a')
+                        if not name_el:
+                            continue
+                        name = name_el.inner_text().strip()
+                        href = name_el.get_attribute('href') or ''
+                        
+                        # Get developer
+                        dev_el = row.query_selector('.developer')
+                        developer = dev_el.inner_text().strip() if dev_el else 'Unknown'
+                        
+                        # Extract package from URL
+                        pkg_match = re.search(r'/apk/([^/]+)/([^/]+)/', href)
+                        if pkg_match:
+                            package = f"com.{pkg_match.group(1)}.{pkg_match.group(2)}"
+                        else:
+                            package = name.lower().replace(' ', '.').replace('-', '.')
+                        
+                        results.append({
+                            "name": name,
+                            "package": package,
+                            "developer": developer,
+                            "version": "latest",
+                            "source": "apkmirror",
+                            "url": f"https://www.apkmirror.com{href}"
+                        })
+                    except Exception:
+                        continue
+                
+                browser.close()
             
             self.done()
             return results
             
-        except urllib.error.HTTPError as e:
-            self.done()
-            if e.code == 429:
-                self.error("Rate limited by APKMirror (use --proxy tor)")
-            else:
-                self.error(f"HTTP {e.code}: {e.reason}")
-            return []
         except Exception as e:
             self.done()
             self.error(f"Search failed: {e}")
