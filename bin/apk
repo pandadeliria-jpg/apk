@@ -331,46 +331,47 @@ class APKManager:
         download_dir.mkdir(parents=True, exist_ok=True)
         
         try:
-            # Get download URL from F-Droid
-            # F-Droid URL format: https://f-droid.org/repo/{package}_{version}.apk
-            # First, get the latest version info
             import urllib.request
-            import json
+            import re
             
-            # Try to get package info from F-Droid
-            index_url = "https://f-droid.org/api/v1/index.json"
-            headers = {'User-Agent': 'Mozilla/5.0'}
+            headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'}
             
-            req = urllib.request.Request(index_url, headers=headers)
-            with urllib.request.urlopen(req, timeout=30) as response:
-                data = json.loads(response.read().decode('utf-8'))
+            # Get the package page to find download link
+            package_url = f"https://f-droid.org/packages/{package}/"
             
-            # Find the package
-            for app in data.get('apps', []):
-                if app.get('packageName') == package:
-                    # Get suggested version code
-                    version_code = app.get('suggestedVersionCode')
-                    if version_code:
-                        # Build download URL
-                        apk_url = f"https://f-droid.org/repo/{package}_{version_code}.apk"
-                        
-                        self.done()
-                        self.spinner(f"Downloading APK from F-Droid")
-                        
-                        # Download the APK
-                        output_path = download_dir / f"{package.replace('.', '_')}.apk"
-                        
-                        req = urllib.request.Request(apk_url, headers=headers)
-                        with urllib.request.urlopen(req, timeout=60) as response:
-                            with open(output_path, 'wb') as f:
-                                f.write(response.read())
-                        
-                        self.done()
-                        return output_path
+            req = urllib.request.Request(package_url, headers=headers)
+            with urllib.request.urlopen(req, timeout=15) as response:
+                html = response.read().decode('utf-8')
+            
+            # Find download link - F-Droid format: https://f-droid.org/repo/package_version.apk
+            # or look for the .apk link in the HTML
+            apk_match = re.search(r'href="(https://f-droid\.org/repo/[^"]+\.apk)"', html)
+            
+            if not apk_match:
+                # Try alternative pattern
+                apk_match = re.search(r'href="(/repo/[^"]+\.apk)"', html)
+                if apk_match:
+                    apk_url = "https://f-droid.org" + apk_match.group(1)
+                else:
+                    self.done()
+                    self.error(f"Could not find download link for {package}")
+                    return None
+            else:
+                apk_url = apk_match.group(1)
             
             self.done()
-            self.error(f"Package '{package}' not found in F-Droid repository")
-            return None
+            self.spinner(f"Downloading APK")
+            
+            # Download the APK
+            output_path = download_dir / f"{package.replace('.', '_')}.apk"
+            
+            req = urllib.request.Request(apk_url, headers=headers)
+            with urllib.request.urlopen(req, timeout=60) as response:
+                with open(output_path, 'wb') as f:
+                    f.write(response.read())
+            
+            self.done()
+            return output_path
             
         except Exception as e:
             self.done()
