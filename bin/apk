@@ -168,7 +168,8 @@ class APKManager:
         return None
     
     def _is_warp_running(self) -> bool:
-        """Check if Cloudflare WARP is running"""
+        """Check if Cloudflare WARP is running (macOS app or Linux CLI)"""
+        # Try Linux CLI first
         try:
             result = subprocess.run(
                 ['warp-cli', 'status'],
@@ -176,41 +177,56 @@ class APKManager:
                 text=True,
                 timeout=5
             )
-            return result.returncode == 0 and 'Connected' in result.stdout
+            if result.returncode == 0 and ('Connected' in result.stdout or 'Connected' in result.stderr):
+                return True
         except (subprocess.SubprocessError, FileNotFoundError):
-            return False
+            pass
+        
+        # Check macOS WARP app by querying Cloudflare's WARP check endpoint
+        try:
+            req = urllib.request.Request(
+                'https://cloudflare.com/cdn-cgi/trace',
+                headers={'User-Agent': 'Mozilla/5.0'},
+                method='GET'
+            )
+            with urllib.request.urlopen(req, timeout=5) as response:
+                content = response.read().decode('utf-8')
+                # If warp=on in response, WARP is active
+                return 'warp=on' in content or 'warp=plus' in content
+        except Exception:
+            pass
+        
+        # Check if WARP network interface exists (macOS)
+        try:
+            result = subprocess.run(
+                ['ifconfig', 'utun'],
+                capture_output=True,
+                text=True,
+                timeout=2
+            )
+            # WARP typically creates utun interfaces
+            if 'utun' in result.stdout:
+                # Additional check: look for Cloudflare DNS
+                dns_result = subprocess.run(
+                    ['scutil', '--dns'],
+                    capture_output=True,
+                    text=True,
+                    timeout=2
+                )
+                # WARP uses 1.1.1.1 or 1.0.0.1
+                if '1.1.1.1' in dns_result.stdout or '1.0.0.1' in dns_result.stdout:
+                    return True
+        except (subprocess.SubprocessError, FileNotFoundError):
+            pass
+        
+        return False
     
     def _get_warp_proxy(self) -> Optional[str]:
-        """Get WARP SOCKS5 proxy URL"""
-        # WARP creates a local SOCKS5 proxy
-        # Check if WARP socks proxy is available
-        try:
-            result = subprocess.run(
-                ['warp-cli', 'socks5', 'enable'],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            # WARP SOCKS5 runs on localhost:8080 by default
-            return 'socks5://127.0.0.1:8080'
-        except (subprocess.SubprocessError, FileNotFoundError):
-            pass
-        
-        # Fallback: use WARP's HTTP proxy if available
-        try:
-            result = subprocess.run(
-                ['warp-cli', 'tunnel', 'ip'],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            if result.returncode == 0:
-                # Use WARP virtual IP as proxy indicator
-                return 'http://127.0.0.1:8080'
-        except (subprocess.SubprocessError, FileNotFoundError):
-            pass
-        
-        return None
+        """Get WARP proxy URL (for routing traffic through WARP)"""
+        # For macOS WARP app, traffic is already routed through WARP at system level
+        # We just need to indicate that WARP is active
+        # No proxy URL needed - WARP is a VPN, not a SOCKS proxy
+        return 'warp://active'  # Special marker indicating system WARP is active
     
     def _is_tor_running(self) -> bool:
         """Check if Tor daemon is running"""
@@ -269,8 +285,11 @@ class APKManager:
         # Show proxy info
         if proxy:
             self.done()
-            proxy_type = proxy.split(':')[0].upper()
-            self.info(f"Using {proxy_type} proxy: {proxy}")
+            if proxy == 'warp://active':
+                self.info(f"Using {C.CYAN}WARP VPN{C.END} (system-level)")
+            else:
+                proxy_type = proxy.split(':')[0].upper()
+                self.info(f"Using {proxy_type} proxy: {proxy}")
             self.spinner(f"Downloading {package}")
 
         # Check for apkmirror-downloader
@@ -297,7 +316,10 @@ class APKManager:
             # Set proxy environment variable if available
             env = os.environ.copy()
             if proxy:
-                if proxy.startswith('socks5://'):
+                if proxy == 'warp://active':
+                    # WARP is active at system level - no proxy env vars needed
+                    pass
+                elif proxy.startswith('socks5://'):
                     env['SOCKS_PROXY'] = proxy
                     env['ALL_PROXY'] = proxy
                 elif proxy.startswith('http://') or proxy.startswith('https://'):
