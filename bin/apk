@@ -81,45 +81,48 @@ class APKManager:
         # Skip Tor/WARP to save time
         
         try:
-            # Use F-Droid's index JSON API
-            index_url = "https://f-droid.org/api/v1/index.json"
+            # Use F-Droid search page (HTML parsing)
+            search_url = f"https://search.f-droid.org/?q={urllib.parse.quote(query)}"
             
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-                'Accept': 'application/json',
+                'Accept': 'text/html',
             }
             
-            req = urllib.request.Request(index_url, headers=headers)
+            req = urllib.request.Request(search_url, headers=headers)
             
-            with urllib.request.urlopen(req, timeout=30) as response:
-                data = json.loads(response.read().decode('utf-8'))
+            with urllib.request.urlopen(req, timeout=15) as response:
+                html = response.read().decode('utf-8')
             
             results = []
-            query_lower = query.lower()
+            import re
             
-            # Search through apps in the index
-            for app in data.get('apps', []):
-                name = app.get('localized', {}).get('en-US', {}).get('name', '') or app.get('name', '')
-                summary = app.get('localized', {}).get('en-US', {}).get('summary', '') or app.get('summary', '')
-                package = app.get('packageName', '')
+            # Parse F-Droid search results from HTML
+            # Pattern matches: <a class="package-header" href="https://f-droid.org/en/packages/PACKAGE">
+            #   ... <h4 class="package-name">NAME</h4> ...
+            #   ... <span class="package-summary">SUMMARY</span> ...
+            app_pattern = r'<a class="package-header"[^>]*href="https://f-droid\.org/en/packages/([^"/]+)/?"[^>]*>.*?<h4[^>]*>([^<]+)</h4>.*?<span class="package-summary">([^<]+)</span>.*?</a>'
+            
+            seen = set()
+            matches = re.findall(app_pattern, html, re.DOTALL | re.IGNORECASE)
+            
+            for package, name, summary in matches:
+                if package in seen:
+                    continue
+                seen.add(package)
                 
-                # Check if query matches
-                if (query_lower in name.lower() or 
-                    query_lower in package.lower() or
-                    query_lower in summary.lower()):
-                    
-                    results.append({
-                        "name": name or package.split('.')[-1].title(),
-                        "package": package,
-                        "developer": app.get('authorName', 'F-Droid'),
-                        "version": app.get('suggestedVersionName', 'latest'),
-                        "source": "fdroid",
-                        "url": f"https://f-droid.org/packages/{package}/",
-                        "summary": summary
-                    })
-                    
-                    if len(results) >= 15:  # Limit results
-                        break
+                results.append({
+                    "name": name.strip(),
+                    "package": package.strip(),
+                    "developer": 'F-Droid',
+                    "version": 'latest',
+                    "source": "fdroid",
+                    "url": f"https://f-droid.org/packages/{package}/",
+                    "summary": summary.strip()[:60]
+                })
+                
+                if len(results) >= 15:  # Limit results
+                    break
             
             self.done()
             return results
