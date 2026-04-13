@@ -660,6 +660,44 @@ class APKManager:
             self.error(f"Check failed: {e}")
             print(f"\n{C.DIM}GitHub repo: https://github.com/{GITHUB_REPO}{C.END}")
 
+    def auto_update_check(self):
+        """Silently check for updates (runs automatically, non-blocking)"""
+        # Check once per day
+        last_check_file = APK_CACHE / '.last_update_check'
+        
+        try:
+            import time
+            current_time = time.time()
+            
+            # Check if we checked recently (within 24 hours)
+            if last_check_file.exists():
+                last_check = float(last_check_file.read_text().strip())
+                if current_time - last_check < 86400:  # 24 hours
+                    return
+            
+            # Record check time
+            last_check_file.write_text(str(current_time))
+            
+            # Quick version check (5 second timeout, silent failures)
+            req = urllib.request.Request(
+                f"{GITHUB_RAW}/bin/apk",
+                headers={'User-Agent': 'Mozilla/5.0'}
+            )
+            
+            with urllib.request.urlopen(req, timeout=5) as response:
+                content = response.read().decode('utf-8')
+                match = re.search(r'VERSION = "([0-9.]+)"', content)
+                remote_version = match.group(1) if match else None
+            
+            if remote_version and remote_version != VERSION:
+                # Show update notification
+                print(f"\n{C.YELLOW}⚠ Update available: apk {remote_version} (current: {VERSION}){C.END}")
+                print(f"{C.DIM}  Run 'apk --self-update' to update{C.END}\n")
+                
+        except Exception:
+            # Silently fail - don't annoy user if offline
+            pass
+
     def self_update(self):
         """Update apk command from GitHub"""
         self.header("Updating APK Manager")
@@ -772,6 +810,10 @@ def main():
     command = sys.argv[1]
     args = sys.argv[2:]
     apk = APKManager()
+    
+    # Auto-check for updates (once per day, non-blocking)
+    if command not in ('--version', '-v', '--help', '-h', '--self-update', '--check-update'):
+        apk.auto_update_check()
     
     # Global flags that can come before or after commands
     if command in ('--version', '-v'):
