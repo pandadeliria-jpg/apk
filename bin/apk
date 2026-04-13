@@ -77,9 +77,8 @@ class APKManager:
         """Search F-Droid (open source app repository) - fast, no bot protection"""
         self.spinner(f"Searching F-Droid for '{query}'")
         
-        # Get proxy if not provided  
-        if not proxy:
-            proxy = self._get_proxy()
+        # F-Droid doesn't need proxy (no bot protection)
+        # Skip Tor/WARP to save time
         
         try:
             # F-Droid has a simple search API
@@ -123,10 +122,11 @@ class APKManager:
             return []
     
     def search(self, query: str, proxy: str = None):
-        """Search for apps with optional proxy (uses F-Droid - fast, no bot detection)"""
+        """Search for apps (uses F-Droid - no proxy needed, fast)"""
         self.header(f"Searching: {query}")
         
-        results = self.search_fdroid(query, proxy=proxy)
+        # F-Droid doesn't need proxy (no bot protection)
+        results = self.search_fdroid(query)
         
         if not results:
             print(f"{C.YELLOW}No packages found matching '{query}'{C.END}")
@@ -1278,7 +1278,8 @@ def main():
         if not args:
             apk.error("Usage: apk search <query>")
             return
-        apk.search(args[0], proxy=proxy)
+        # F-Droid doesn't need proxy
+        apk.search(args[0])
         return
     
     if command == 'update':
