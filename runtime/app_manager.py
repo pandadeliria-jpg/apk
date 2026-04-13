@@ -158,8 +158,6 @@ class AppManager:
                 # Try to detect common package patterns
                 if 'google' in base_name and 'play' in base_name:
                     package_name = 'com.google.android.play'
-                elif 'roblox' in base_name:
-                    package_name = 'com.roblox.client'
                 elif 'minecraft' in base_name:
                     package_name = 'com.mojang.minecraftpe'
                 else:
