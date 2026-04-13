@@ -907,18 +907,18 @@ class APKManager:
             checks_passed += 1
         else:
             self.done()
-            print(f"  {C.DIM}○{C.END} WARP not connected (open WARP app and toggle on)")
+            print(f"  {C.DIM}○{C.END} WARP not connected (system-wide VPN, toggle in app)")
         
-        # Check 4: Tor status
+        # Check 4: Tor status (per-process proxy alternative to WARP)
         checks_total += 1
-        self.spinner("Checking Tor")
+        self.spinner("Checking Tor SOCKS proxy")
         if self._is_tor_running():
             self.done()
-            print(f"  {C.GREEN}✓{C.END} Tor daemon running")
+            print(f"  {C.GREEN}✓{C.END} Tor SOCKS5 proxy running (per-process routing)")
             checks_passed += 1
         else:
             self.done()
-            print(f"  {C.DIM}○{C.END} Tor not running (optional)")
+            print(f"  {C.DIM}○{C.END} Tor not running (install for per-process routing: brew install tor)")
         
         # Check 5: Directories
         checks_total += 1
@@ -1152,7 +1152,12 @@ class APKManager:
   {C.GREEN}--check-update{C.END}          Check for updates
   {C.GREEN}--proxy{C.END} <url>            Use proxy (socks5://, http://, warp, tor)
 
-{C.BOLD}Examples:{C.END}
+{C.BOLD}Proxy Examples:{C.END}
+  apk --proxy tor install pkg         Route via Tor SOCKS5 (per-process only)
+  apk --proxy warp install pkg        Use system WARP VPN (all traffic)
+  apk config --set-proxy tor          Auto-use Tor for all apk downloads
+
+{C.BOLD}Regular Examples:{C.END}
   apk install com.roblox.client       Install from repository
   apk install ./app.apk               Install local APK file
   apk install ./bundle.apkm           Install APKMirror bundle (.apkm, .xapk)
@@ -1162,8 +1167,6 @@ class APKManager:
   apk show com.roblox.client          Show package details
   apk list                            List installed packages
   apk run com.roblox.client           Run installed package
-  apk --proxy tor install pkg         Use Tor for download
-  apk config --set-proxy warp         Auto-use WARP for all downloads
 
 {C.DIM}Sources: APKMirror{C.END}
 """)
