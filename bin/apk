@@ -43,7 +43,7 @@ CACHE_DIR = APK_CACHE  # Legacy compatibility
 # Version and update config
 VERSION = "1.1.0"
 GITHUB_REPO = "pandadeliria-jpg/apk"
-GITHUB_RAW = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/android_compat"
+GITHUB_RAW = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main"
 
 class APKManager:
     def __init__(self):
@@ -81,37 +81,45 @@ class APKManager:
         # Skip Tor/WARP to save time
         
         try:
-            # F-Droid has a simple search API
-            search_url = f"https://search.f-droid.org/?q={urllib.parse.quote(query)}"
+            # Use F-Droid's index JSON API
+            index_url = "https://f-droid.org/api/v1/index.json"
             
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-                'Accept': 'application/json, text/html',
+                'Accept': 'application/json',
             }
             
-            req = urllib.request.Request(search_url, headers=headers)
+            req = urllib.request.Request(index_url, headers=headers)
             
-            with urllib.request.urlopen(req, timeout=10) as response:
-                html = response.read().decode('utf-8')
+            with urllib.request.urlopen(req, timeout=30) as response:
+                data = json.loads(response.read().decode('utf-8'))
             
-            # Parse F-Droid search results
             results = []
-            import re
+            query_lower = query.lower()
             
-            # Find package entries in search results
-            # F-Droid format: package-name - App Name
-            app_pattern = r'<a[^>]*href="/packages/([^"]+)/"[^>]*>.*?<h4[^>]*>([^<]+)</h4>.*?<p[^>]*>([^<]*)</p>.*?</a>'
-            matches = re.findall(app_pattern, html, re.DOTALL | re.IGNORECASE)
-            
-            for package, name, summary in matches[:15]:
-                results.append({
-                    "name": name.strip(),
-                    "package": package.strip(),
-                    "developer": summary.strip() if summary else 'F-Droid',
-                    "version": "latest",
-                    "source": "fdroid",
-                    "url": f"https://f-droid.org/packages/{package}/"
-                })
+            # Search through apps in the index
+            for app in data.get('apps', []):
+                name = app.get('localized', {}).get('en-US', {}).get('name', '') or app.get('name', '')
+                summary = app.get('localized', {}).get('en-US', {}).get('summary', '') or app.get('summary', '')
+                package = app.get('packageName', '')
+                
+                # Check if query matches
+                if (query_lower in name.lower() or 
+                    query_lower in package.lower() or
+                    query_lower in summary.lower()):
+                    
+                    results.append({
+                        "name": name or package.split('.')[-1].title(),
+                        "package": package,
+                        "developer": app.get('authorName', 'F-Droid'),
+                        "version": app.get('suggestedVersionName', 'latest'),
+                        "source": "fdroid",
+                        "url": f"https://f-droid.org/packages/{package}/",
+                        "summary": summary
+                    })
+                    
+                    if len(results) >= 15:  # Limit results
+                        break
             
             self.done()
             return results
@@ -139,6 +147,8 @@ class APKManager:
         
         for i, app in enumerate(results, 1):
             print(f"{C.BOLD}{i}.{C.END} {C.CYAN}{app['name']}{C.END}")
+            if app.get('summary'):
+                print(f"   {C.DIM}{app['summary'][:60]}{C.END}")
             print(f"   Package: {C.DIM}{app['package']}{C.END}")
             print(f"   Developer: {app['developer']}")
             print(f"   Version: {C.GREEN}{app['version']}{C.END}")
@@ -721,7 +731,7 @@ class APKManager:
             print(f"{C.BOLD}{len(apps)} package(s) installed:{C.END}\n")
             
             for app in apps:
-                print(f"{C.CYAN}{app.name}{C.END}")
+                print(f"{C.CYAN}{app.app_name}{C.END}")
                 print(f"  Package: {C.DIM}{app.package_name}{C.END}")
                 print(f"  Version: {C.GREEN}{app.version_name}{C.END}")
                 print(f"  Launches: {app.launch_count}")
@@ -1258,7 +1268,7 @@ class APKManager:
         print(f"{C.CYAN}APK Manager (apk){C.END} {C.GREEN}{VERSION}{C.END}")
         print(f"{C.DIM}Install path: {C.CYAN}{__file__}{C.END}")
         print(f"{C.DIM}Compat dir: {C.CYAN}{COMPAT_DIR}{C.END}")
-        print(f"{C.DIM}GitHub: https://github.com/pandadeliria-jpg/robloxgen{C.END}")
+        print(f"{C.DIM}GitHub: https://github.com/{GITHUB_REPO}{C.END}")
     
     def show_help(self):
         """Show apt-style help"""
